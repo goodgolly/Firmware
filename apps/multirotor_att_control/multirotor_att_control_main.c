@@ -107,6 +107,9 @@ mc_thread_main(int argc, char *argv[])
 	struct actuator_controls_s actuators;
 	memset(&actuators, 0, sizeof(actuators));
 
+	struct vehicle_attitude_s attEKFVICONcombined;
+	memset(&attEKFVICONcombined, 0, sizeof(attEKFVICONcombined));
+
 	/* subscribe to attitude, motor setpoints and system state */
 	int att_sub = orb_subscribe(ORB_ID(vehicle_attitude));
 	int param_sub = orb_subscribe(ORB_ID(parameter_update));
@@ -364,9 +367,35 @@ mc_thread_main(int argc, char *argv[])
 
 				/** STEP 3: Identify the controller setup to run and set up the inputs correctly */
 				if (state.flag_control_attitude_enabled) {
-					multirotor_control_attitude(&att_sp, &att, &rates_sp, control_yaw_position);
 
-					orb_publish(ORB_ID(vehicle_rates_setpoint), rates_sp_pub, &rates_sp);
+					if(state.state_machine == SYSTEM_STATE_AUTO){
+						/* Im using vicon attitude now */
+						/* copy whole ekf attutude into new struct and change roll pitch yaw to vicon data */
+						memcpy(attEKFVICONcombined.R, att.R, sizeof(attEKFVICONcombined.R));
+						attEKFVICONcombined.R_valid = att.R_valid;
+						//attEKFVICONcombined.counter = att.counter;
+						attEKFVICONcombined.pitch = att.pitch;//vicon_pos.pitch;
+						attEKFVICONcombined.pitchacc = att.pitchacc;
+						attEKFVICONcombined.pitchspeed = att.pitchspeed;
+						memcpy(attEKFVICONcombined.q, att.q, sizeof(attEKFVICONcombined.q));
+						attEKFVICONcombined.q_valid = att.q_valid;
+						memcpy(attEKFVICONcombined.rate_offsets, att.rate_offsets, sizeof(attEKFVICONcombined.rate_offsets));
+						attEKFVICONcombined.roll = att.roll;//vicon_pos.roll;
+						attEKFVICONcombined.rollacc = att.rollacc;
+						attEKFVICONcombined.rollspeed = att.rollspeed;
+						attEKFVICONcombined.timestamp = att.timestamp;
+						attEKFVICONcombined.yaw = att.yaw;//att.yaw - att_sp.yaw_offset_rad;//vicon_pos.yaw
+						attEKFVICONcombined.yawacc = att.yawacc;
+						attEKFVICONcombined.yawspeed = att.yawspeed;
+
+						//multirotor_control_attitude(&att_sp, &attEKFVICONcombined, &rates_sp, control_yaw_position);
+						multirotor_control_attitude(&att_sp, &attEKFVICONcombined, &rates_sp, control_yaw_position);
+						orb_publish(ORB_ID(vehicle_rates_setpoint), rates_sp_pub, &rates_sp);
+					}else{
+						/*flying manual mode, everything with ekf data */
+						multirotor_control_attitude(&att_sp, &att, &rates_sp, control_yaw_position);
+						orb_publish(ORB_ID(vehicle_rates_setpoint), rates_sp_pub, &rates_sp);
+					}
 				}
 
 				/* measure in what intervals the controller runs */

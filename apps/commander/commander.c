@@ -1724,6 +1724,7 @@ int commander_thread_main(int argc, char *argv[])
 
 				/* mark home position as set */
 				home_position_set = true;
+				current_status.flag_home_position_set = true;
 				tune_confirm();
 			}
 		}

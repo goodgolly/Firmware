@@ -1,8 +1,9 @@
 /****************************************************************************
  *
  *   Copyright (C) 2012 PX4 Development Team. All rights reserved.
- *   Author: Tobias Naegeli <naegelit@student.ethz.ch>
- *           Lorenz Meier <lm@inf.ethz.ch>
+ *   Author: 	Damian Aregger <daregger@student.ethz.ch>
+ *   			Tobias Naegeli <naegelit@student.ethz.ch>
+* 				Lorenz Meier <lm@inf.ethz.ch>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -34,43 +35,54 @@
  ****************************************************************************/
 
 /*
- * @file multirotor_position_control_params.c
+ * @file position_estimator1D_params.c
  * 
- * Parameters for EKF filter
+ * Parameters for position_estimator1D
  */
 
-#include "multirotor_pos_control_params.h"
+#include "position_estimator1D_params.h"
 
-/* Extended Kalman Filter covariances */
+/* Kalman Filter covariances */
 
-/* controller parameters */
-PARAM_DEFINE_FLOAT(MC_POS_P, 0.25f);
-PARAM_DEFINE_FLOAT(MC_POS_D, 0.0f);
-PARAM_DEFINE_FLOAT(MC_HI_P, 0.1f);
-PARAM_DEFINE_FLOAT(MC_HI_SP, -0.5f);
-PARAM_DEFINE_FLOAT(MC_POS_K1, 1.0f);
-PARAM_DEFINE_FLOAT(MC_POS_K2, 1.0f);
+/* gps process noise */
+PARAM_DEFINE_FLOAT(POS_EST_Q11, 1e-1f);
+PARAM_DEFINE_FLOAT(POS_EST_Q22, 1e-1f);
+PARAM_DEFINE_FLOAT(POS_EST_Q33, 0.0f);
 
+/* gps measurement noise standard deviation */
+PARAM_DEFINE_FLOAT(POS_EST_SIGMA, 1.0f);
+PARAM_DEFINE_FLOAT(POS_EST_R, 1.0f);
 
-int parameters_init(struct multirotor_position_control_param_handles *h)
+PARAM_DEFINE_FLOAT(POS_EST_useVicon, 0.0f);
+PARAM_DEFINE_FLOAT(POS_EST_accThres, 0.1f);
+PARAM_DEFINE_FLOAT(POS_EST_flyingT, 230.0f);
+PARAM_DEFINE_FLOAT(POS_EST_velDecay, 0.995f);
+
+int parameters_init(struct position_estimator1D_param_handles *h)
 {
-	/* PID parameters */
-	h->pos_p 	=	param_find("MC_POS_P");
-	h->pos_d 	=	param_find("MC_POS_D");
-	h->height_p =	param_find("MC_HI_P");
-	h->height_sp =  param_find("MC_HI_SP");
-	h->k1 =  param_find("MC_POS_K1");
-	h->k2 =  param_find("MC_POS_K2");
+	/* Kalman Filter Parameter*/
+	h->q11 	=	param_find("POS_EST_Q11");
+	h->q22 	=	param_find("POS_EST_Q22");
+	h->q33 	=	param_find("POS_EST_Q33");
+	h->sigma 	=	param_find("POS_EST_SIGMA");
+	h->r 	=	param_find("POS_EST_R");
+	h->useVicon_param_handle = param_find("POS_EST_useVicon");
+	h->accThreshold_param_handle = param_find("POS_EST_accThres");
+	h->flyingThreshold_param_handle = param_find("POS_EST_flyingT");
+	h->velDecay_param_handle = param_find("POS_EST_velDecay");
 	return OK;
 }
 
-int parameters_update(const struct multirotor_position_control_param_handles *h, struct multirotor_position_control_params *p)
+int parameters_update(const struct position_estimator1D_param_handles *h, struct position_estimator1D_params *p)
 {
-	param_get(h->pos_p, &(p->pos_p));
-	param_get(h->pos_d, &(p->pos_d));
-	param_get(h->height_p, &(p->height_p));
-	param_get(h->height_sp, &(p->height_sp));
-	param_get(h->k1, &(p->k1));
-	param_get(h->k2, &(p->k2));
+	param_get(h->q11, &(p->QQ[0]));
+	param_get(h->q22, &(p->QQ[1]));
+	param_get(h->q33, &(p->QQ[2]));
+	param_get(h->sigma, &(p->sigma));
+	param_get(h->r, &(p->R));
+	param_get(h->useVicon_param_handle, &(p->useVicon));
+	param_get(h->accThreshold_param_handle, &(p->accThres));
+	param_get(h->flyingThreshold_param_handle, &(p->flyingT));
+	param_get(h->velDecay_param_handle, &(p->velDecay));
 	return OK;
 }

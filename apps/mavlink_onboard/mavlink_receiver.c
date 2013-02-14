@@ -162,6 +162,7 @@ handle_message(mavlink_message_t *msg)
 			orb_publish(ORB_ID(optical_flow), flow_pub, &f);
 		}
 
+		//printf("GOT FLOW!\n");
 	}
 
 	if (msg->msgid == MAVLINK_MSG_ID_SET_MODE) {
@@ -198,12 +199,19 @@ handle_message(mavlink_message_t *msg)
 		mavlink_vicon_position_estimate_t pos;
 		mavlink_msg_vicon_position_estimate_decode(msg, &pos);
 
+		vicon_position.timestamp = hrt_absolute_time();
+
 		vicon_position.x = pos.x;
 		vicon_position.y = pos.y;
 		vicon_position.z = pos.z;
 
+		vicon_position.roll = pos.roll;
+		vicon_position.pitch = pos.pitch;
+		vicon_position.yaw = pos.yaw;
+
 		if (vicon_position_pub <= 0) {
 			vicon_position_pub = orb_advertise(ORB_ID(vehicle_vicon_position), &vicon_position);
+
 		} else {
 			orb_publish(ORB_ID(vehicle_vicon_position), vicon_position_pub, &vicon_position);
 		}

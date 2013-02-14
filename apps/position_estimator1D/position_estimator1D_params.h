@@ -1,8 +1,9 @@
 /****************************************************************************
  *
  *   Copyright (C) 2012 PX4 Development Team. All rights reserved.
- *   Author: Tobias Naegeli <naegelit@student.ethz.ch>
- *           Lorenz Meier <lm@inf.ethz.ch>
+ *   Author: 	Damian Aregger <daregger@student.ethz.ch>
+ *   			Tobias Naegeli <naegelit@student.ethz.ch>
+ *				Lorenz Meier <lm@inf.ethz.ch>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -34,41 +35,41 @@
  ****************************************************************************/
 
 /*
- * @file multirotor_position_control_params.h
+ * @file position_estimator1D_params.h
  * 
- * Parameters for position controller
+ * Parameters for Position Estimator
  */
 
 #include <systemlib/param/param.h>
 
-struct multirotor_position_control_params {
-	float pos_p;
-	float i;
-	float pos_d;
-	float height_p;
-	float height_sp;
-	float k1;
-	float k2;
+struct position_estimator1D_params {
+	float QQ[3];
+	float sigma;
+	float R;
+	float useVicon;
+	float accThres;
+	float flyingT;
+	float velDecay;
 };
 
-struct multirotor_position_control_param_handles {
-	param_t pos_p;
-	param_t i;
-	param_t pos_d;
-	param_t height_p;
-	param_t height_sp;
-	param_t k1;
-	param_t k2;
+struct position_estimator1D_param_handles {
+	param_t q11, q22, q33;
+	param_t sigma;
+	param_t r;
+	param_t useVicon_param_handle;
+	param_t accThreshold_param_handle;
+	param_t flyingThreshold_param_handle;
+	param_t velDecay_param_handle;
 };
 
 /**
  * Initialize all parameter handles and values
  *
  */
-int parameters_init(struct multirotor_position_control_param_handles *h);
+int parameters_init(struct position_estimator1D_param_handles *h);
 
 /**
  * Update all parameters
  *
  */
-int parameters_update(const struct multirotor_position_control_param_handles *h, struct multirotor_position_control_params *p);
+int parameters_update(const struct position_estimator1D_param_handles *h, struct position_estimator1D_params *p);
