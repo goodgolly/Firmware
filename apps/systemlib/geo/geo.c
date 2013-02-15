@@ -60,6 +60,13 @@ static double cos_phi_1;
 static double lambda_0;
 static double scale;
 
+/**
+ * Initializes the map transformation.
+ *
+ * Initializes the transformation between the geographic coordinate system and the azimuthal equidistant plane
+ * @param lat in degrees (47.1234567°, not 471234567°)
+ * @param lon in degrees (8.1234567°, not 81234567°)
+ */
 __EXPORT void map_projection_init(double lat_0, double lon_0) //lat_0, lon_0 are expected to be in correct format: -> 47.1234567 and not 471234567
 {
 	/* notation and formulas according to: http://mathworld.wolfram.com/AzimuthalEquidistantProjection.html */
@@ -98,6 +105,13 @@ __EXPORT void map_projection_init(double lat_0, double lon_0) //lat_0, lon_0 are
 
 }
 
+/**
+ * Transforms a point in the geographic coordinate system to the local azimuthal equidistant plane
+ * @param x north
+ * @param y east
+ * @param lat in degrees (47.1234567°, not 471234567°)
+ * @param lon in degrees (8.1234567°, not 81234567°)
+ */
 __EXPORT void map_projection_project(double lat, double lon, float *x, float *y)
 {
 	/* notation and formulas accoring to: http://mathworld.wolfram.com/AzimuthalEquidistantProjection.html */
@@ -121,6 +135,14 @@ __EXPORT void map_projection_project(double lat, double lon, float *x, float *y)
 //	printf("%phi_1=%.10f, lambda_0 =%.10f\n", phi_1, lambda_0);
 }
 
+/**
+ * Transforms a point in the local azimuthal equidistant plane to the geographic coordinate system
+ *
+ * @param x north
+ * @param y east
+ * @param lat in degrees (47.1234567°, not 471234567°)
+ * @param lon in degrees (8.1234567°, not 81234567°)
+ */
 __EXPORT void map_projection_reproject(float x, float y, double *lat, double *lon)
 {
 	/* notation and formulas accoring to: http://mathworld.wolfram.com/AzimuthalEquidistantProjection.html */

@@ -62,15 +62,13 @@
 #include <uORB/topics/vehicle_status.h>
 #include <uORB/topics/vehicle_vicon_position.h>
 #include <uORB/topics/vehicle_local_position.h>
+#include <uORB/topics/vehicle_gps_position.h>
 #include <mavlink/mavlink_log.h>
 #include <poll.h>
 #include <systemlib/geo/geo.h>
 
-#include "codegen/positionKalmanFilter1D.h"
 #include "position_estimator1D_params.h"
-#include "codegen/positionKalmanFilter1D_dT.h"
 //#include <uORB/topics/debug_key_value.h>
-#include "codegen/kalman_dlqe1.h"
 #include "codegen/kalman_dlqe2.h"
 
 
@@ -78,8 +76,6 @@
 static bool thread_should_exit = false;	/**< Deamon exit flag */
 static bool thread_running = false;	/**< Deamon status flag */
 static int position_estimator1D_task;	/**< Handle of deamon task / thread */
-
-#define N_STATES 3
 
 __EXPORT int position_estimator1D_main(int argc, char *argv[]);
 
@@ -181,7 +177,9 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 	//bool velocity_observe_y = 0;
 	//bool gps_update = 0;
 	//bool stateFlying = 0;
-	float useVicon = 0;
+	bool useGPS = true;
+	bool gps_valid = false;
+	static float z[3] = {0, 0, 0};
 
 	float x_x_aposteriori_k[3] = {1.0f, 0.0f, 0.0f};
 	float x_y_aposteriori_k[3] = {1.0f, 0.0f, 0.0f};
@@ -247,19 +245,19 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 	int loopcounter = 0;
 	int debugCNT = 0;
 
-	static double lat_current = 0.0d;//[°]] --> 47.0
+	static double lat_current = 0.0d; //[°]] --> 47.0
 	static double lon_current = 0.0d; //[°]] -->8.5
+	static double alt_current = 0.0d; //[m] above MSL
 
 	/* Initialize filter */
-	positionKalmanFilter1D_initialize();
-	positionKalmanFilter1D_dT_initialize();
-	kalman_dlqe1_initialize();
 	kalman_dlqe2_initialize();
 
 	struct vehicle_attitude_s att;
 	struct vehicle_status_s vehicle_status;
 	struct vehicle_vicon_position_s vicon_pos;
 	struct actuator_controls_effective_s act_eff;
+	struct vehicle_gps_position_s gps;
+	gps.fix_type = 0;
 
 	/* subscribe to param changes */
 	int sub_params = orb_subscribe(ORB_ID(parameter_update));
@@ -269,16 +267,19 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 	int actuator_sub_fd = orb_subscribe(ORB_ID(actuator_outputs_0));
 	/* subscribe to vehicle_status ??? Hz */
 	int vehicle_status_sub = orb_subscribe(ORB_ID(vehicle_status));
-	/* subscribe to vehicle_status with external Vicon Frequency Hz */
+	/* subscribe to Vicon Position Hz */
 	int vicon_pos_sub = orb_subscribe(ORB_ID(vehicle_vicon_position));
-	/* actuator effective*/
+	/* actuator effective */
 	int actuator_eff_sub = orb_subscribe(ORB_ID(actuator_controls_effective_0));
+	/* GPS */
+	int vehicle_gps_sub = orb_subscribe(ORB_ID(vehicle_gps_position));
 
 	struct position_estimator1D_params pos1D_params;
 	struct position_estimator1D_param_handles pos1D_param_handles;
+
 	/* initialize parameter handles */
 	parameters_init(&pos1D_param_handles);
-	//parameters_update(&pos1D_param_handles, &pos1D_params);
+	parameters_update(&pos1D_param_handles, &pos1D_params);
 
 	//struct debug_key_value_s dbg1 = { .key = "dbg:x_pos_err", .value = 0.0f };
 	//struct debug_key_value_s dbg2 = { .key = "dbg:y_pos_err", .value = 0.0f };
@@ -297,7 +298,42 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 
 	uint64_t last_time = 0;
 
-	/* onboard calculated position estimations */
+	if(useGPS){
+		mavlink_log_info(mavlink_fd, "We are using GPS");
+		/* wait until gps signal turns valid, only then can we initialize the projection */
+		while (gps.fix_type < 3) {
+			struct pollfd fds[1] = { {.fd = vehicle_gps_sub, .events = POLLIN} };
+
+			/* wait for GPS updates, BUT READ VEHICLE STATUS (!)
+			 * this choice is critical, since the vehicle status might not
+			 * actually change, if this app is started after GPS lock was
+			 * aquired.
+			 */
+			if (poll(fds, 1, 5000)) {
+				/* Wait for the GPS update to propagate (we have some time) */
+				usleep(5000);
+				/* Read wether the vehicle status changed */
+				orb_copy(ORB_ID(vehicle_gps_position), vehicle_gps_sub, &gps);
+				gps_valid = (gps.fix_type > 2);
+			}
+			printf("wait for fix type 3");
+		}
+
+		/* get gps value for first initialization */
+		orb_copy(ORB_ID(vehicle_gps_position), vehicle_gps_sub, &gps);
+		lat_current = ((double)(gps.lat)) * 1e-7;
+		lon_current = ((double)(gps.lon)) * 1e-7;
+		alt_current = gps.alt * 1e-3;
+
+		/* initialize coordinates */
+		map_projection_init(lat_current, lon_current);
+
+		/* publish global position messages only after first GPS message */
+		printf("[multirotor position estimator] initialized projection with: lat: %.10f,  lon:%.10f\n", lat_current, lon_current);
+	}else{
+		mavlink_log_info(mavlink_fd, "We are NOT using GPS");
+		/* onboard calculated position estimations */
+	}
 	struct vehicle_local_position_s local_pos_est = {
 		.x = 0,
 		.y = 0,
@@ -336,7 +372,12 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 				//Q[7] = 0.0f;
 				//Q[8] = pos1D_params.QQ[2];
 				//R = pos1D_params.R;
-				useVicon = pos1D_params.useVicon;
+				float useGPStemp = pos1D_params.useGPS;
+				if(useGPStemp == 0.0f){
+					useGPS = false;
+				}else if(useGPStemp == 1.0f){
+					useGPS = true;
+				}
 				velDecay = pos1D_params.velDecay;
 				flyingT = pos1D_params.flyingT;
 				accThres = pos1D_params.accThres;
@@ -345,139 +386,49 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 			if (fds[0].revents & POLLIN) {
 				/* obtained data for the first file descriptor */
 
-				//float dT = (hrt_absolute_time() - last_time) / 1000000.0f;
-				//float dT_adjusted = dT*150.0f/120.0f;
-				last_time = hrt_absolute_time();
-				//printf("[position_estimator1D] dT: %8.4f\n", dT);
-				// 120 Hz at the moment
-
 				/* copy actuator raw data into local buffer */
 				orb_copy(ORB_ID(actuator_controls_effective_0), actuator_eff_sub, &act_eff);
 				orb_copy(ORB_ID(vehicle_attitude), vehicle_attitude_sub, &att);
 				orb_copy(ORB_ID(vehicle_status), vehicle_status_sub, &vehicle_status);
-				/* get a local copy of local vicon position */
-				orb_copy(ORB_ID(vehicle_vicon_position), vicon_pos_sub, &vicon_pos);
-
-				float thrust_scaled = act_eff.control_effective[3];
-				thrust_scaled = thrust_scaled * 511.0f;
-				float motor_thrust_newton = thrust2force(thrust_scaled);
-				//printf("[position_estimator1D] motor_thrust_scaled:\t%8.4f\t\t motor_thrust_newton:\t%8.4f\n", (double)thrust_scaled, (double)thrust2force(thrust_scaled));
-
-				float roll_rad_body;
-				float pitch_rad_body;
-
-				float F_x;
-				float F_y;
-
-				//printf("[position_estimator1D] useVicon: %8.4f\n", (float)useVicon);
-
-				/*if (!useVicon) {
-					//printf("[position_estimator1D] NOT USE VICON\n");
-					roll_rad_body = att.roll;
-					pitch_rad_body = -att.pitch;
-					//printf("[position_estimator1D] motor_thrust_newton: %8.4f\t roll_rad: %8.4f\t pitch_rad: %8.4f\n", motor_thrust_newton, roll_rad, pitch_rad);
-					F_x = motor_thrust_newton*sin(pitch_rad_body);
-					F_y = motor_thrust_newton*sin(roll_rad_body);
-
-					acc_x_body = F_x/mass;
-					acc_y_body = F_y/mass;
-					acc_z_body = motor_thrust_newton-9.81f;
-
-					acc_x_e = acc_x_body;
-					acc_y_e = acc_y_body;
-
-					acc_x_e = 0.0f;
-					acc_y_e = 0.0f;
-
-					//acc_x_e = att.R[0][0]*acc_x_body + att.R[0][1]*acc_y_body + att.R[0][2]*acc_z_body;
-					//acc_y_e = att.R[1][0]*acc_x_body + att.R[1][1]*acc_y_body + att.R[1][2]*acc_z_body;
-					//acc_z_e = att.R[2][0]*acc_x_body + att.R[2][1]*acc_y_body + att.R[2][2]*acc_z_body;
+				if(useGPS){
+					/* get a local copy of gps position */
+					orb_copy(ORB_ID(vehicle_gps_position), vehicle_gps_sub, &gps);
 				}else{
-					//printf("[position_estimator1D] use vicon\n");
-					roll_rad_body = vicon_pos.roll;
-					pitch_rad_body = -vicon_pos.pitch;
-					//printf("[position_estimator1D] motor_thrust_newton: %8.4f\t roll_rad: %8.4f\t pitch_rad: %8.4f\n", motor_thrust_newton, roll_rad, pitch_rad);
-					F_x = motor_thrust_newton*sin(pitch_rad_body);
-					F_y = motor_thrust_newton*sin(roll_rad_body);
-					acc_x_body = F_x/mass;
-					acc_y_body = F_y/mass;
-					acc_z_body = motor_thrust_newton-9.81f;
+					/* get a local copy of local vicon position */
+					orb_copy(ORB_ID(vehicle_vicon_position), vicon_pos_sub, &vicon_pos);
+				}
 
-					rotMatrix[0] = cos(vicon_pos.yaw);
-					rotMatrix[1] = -sin(vicon_pos.yaw);
-					rotMatrix[2] = sin(vicon_pos.yaw);
-					rotMatrix[3] = cos(vicon_pos.yaw);
-
-					acc_x_e = rotMatrix[0]*acc_x_body + rotMatrix[1]*acc_y_body;
-					acc_y_e = rotMatrix[2]*acc_x_body + rotMatrix[3]*acc_y_body;
-
-					acc_x_e = 0.0f;
-					acc_y_e = 0.0f;
-
-					//printf("[position_estimator1D] acc_x_e: %8.4f\t acc_y_e: %8.4f\n", (double)(acc_x_e), (double)(acc_y_e));
-				}*/
+				if(useGPS){
+					/* initialize map projection with the last estimate (not at full rate) */
+					if (gps.fix_type > 2) {
+						/* Project gps lat lon (Geographic coordinate system) to plane*/
+						map_projection_project(((double)(gps.lat)) * 1e-7, ((double)(gps.lon)) * 1e-7, &(z[0]), &(z[1]));
+						local_pos_est.x = z[0];
+						local_pos_est.y = z[1];
+						/* negative offset from initialization altitude */
+						local_pos_est.z = alt_current - (gps.alt) * 1e-3;
+						orb_publish(ORB_ID(vehicle_local_position), local_pos_est_pub, &local_pos_est);
+					}
+				}else{
+					kalman_dlqe2(dT_const,K[0],K[1],K[2],x_x_aposteriori_k,vicon_pos.x,x_x_aposteriori);
+					memcpy(x_x_aposteriori_k, x_x_aposteriori, sizeof(x_x_aposteriori));
+					kalman_dlqe2(dT_const,K[0],K[1],K[2],x_y_aposteriori_k,vicon_pos.y,x_y_aposteriori);
+					memcpy(x_y_aposteriori_k, x_y_aposteriori, sizeof(x_y_aposteriori));
+					local_pos_est.x = x_x_aposteriori_k[0];
+					local_pos_est.vx = x_x_aposteriori_k[1];
+					local_pos_est.y = x_y_aposteriori_k[0];
+					local_pos_est.vy = x_y_aposteriori_k[1];
+					local_pos_est.timestamp = hrt_absolute_time();
+					orb_publish(ORB_ID(vehicle_local_position), local_pos_est_pub, &local_pos_est);
+					//printf("[dqle2] x: %8.4f\t %8.4f\t y: %8.4f\t %8.4f\n", (double)(x_x_aposteriori[0]),(double)(x_x_aposteriori[1]), (double)(x_y_aposteriori[0]), (double)(x_y_aposteriori[1]));
+				}
 
 				static int printcounter = 0;
-
 				if (printcounter == 200) {
 					printcounter = 0;
-					printf("pos x: %d cm pos y: %d cm\n", (int)(vicon_pos.x*100), (int)(vicon_pos.y*100));
+					printf("local_pos_est x: %d cm\ty: %d cm\n", (int)(local_pos_est.x*100), (int)(local_pos_est.y*100));
 				}
 				printcounter++;
-
-				kalman_dlqe2(dT_const,K[0],K[1],K[2],x_x_aposteriori_k,vicon_pos.x,x_x_aposteriori);
-				memcpy(x_x_aposteriori_k, x_x_aposteriori, sizeof(x_x_aposteriori));
-				kalman_dlqe2(dT_const,K[0],K[1],K[2],x_y_aposteriori_k,vicon_pos.y,x_y_aposteriori);
-				memcpy(x_y_aposteriori_k, x_y_aposteriori, sizeof(x_y_aposteriori));
-				local_pos_est.x = x_x_aposteriori_k[0];
-				local_pos_est.vx = x_x_aposteriori_k[1];
-				local_pos_est.y = x_y_aposteriori_k[0];
-				local_pos_est.vy = x_y_aposteriori_k[1];
-
-				local_pos_est.timestamp = hrt_absolute_time();
-
-				orb_publish(ORB_ID(vehicle_local_position), local_pos_est_pub, &local_pos_est);
-				//printf("[dqle2] x: %8.4f\t %8.4f\t y: %8.4f\t %8.4f\n", (double)(x_x_aposteriori[0]),(double)(x_x_aposteriori[1]), (double)(x_y_aposteriori[0]), (double)(x_y_aposteriori[1]));
-
-				//printf("[multirotor_pos_estimator1D] x: %12.8f\tvx: %12.8f\ty: %8.4f\tvy: %8.4f\n", (double)(x_x_aposteriori_k[0]), (double)(x_x_aposteriori_k[1]), (double)(local_pos_est.y), (double)(local_pos_est.vy));
-
-//				if (vehicle_status.state_machine == SYSTEM_STATE_AUTO) {
-//					//printf("[position_estimator1D] AUTO MODE\n");
-//
-//					if (thrust_scaled > flyingT){
-//						/* x Position Kalman Filter */
-//						//positionKalmanFilter1D_dT(dT,x_x_apriori,P_x_apriori,0.0f,vicon_pos.x,1,Q,R,accThres,velDecay,x_x_aposteriori,P_x_aposteriori);
-//						//memcpy(P_x_apriori, P_x_aposteriori, sizeof(P_x_apriori));
-//						//memcpy(x_x_apriori, x_x_aposteriori, sizeof(x_x_apriori));
-//						//printf("[position_estimator1D] xPos: %8.4f\t xVel: %8.4f\n", x_x_apriori[0], x_x_apriori[1]);
-//						/* y Position Kalman Filter */
-//						//positionKalmanFilter1D_dT(dT,x_y_apriori,P_y_apriori,0.0f,vicon_pos.y,1,Q,R,accThres,velDecay,x_y_aposteriori,P_y_aposteriori);
-//						//memcpy(P_y_apriori, P_y_aposteriori, sizeof(P_y_apriori));
-//						//memcpy(x_y_apriori, x_y_aposteriori, sizeof(x_y_apriori));
-//						//printf("[position_estimator1D] yPos: %8.4f\t yVel: %8.4f\n", x_y_apriori[0], x_y_apriori[1]);
-//
-//						//if (isfinite(x_x_apriori[0]) && isfinite(x_x_apriori[1]) && isfinite(x_y_apriori[0]) && isfinite(x_y_apriori[1])){
-//							// Broadcast
-//						//	local_pos_est.x = x_x_apriori[0];
-//						//	local_pos_est.vx = x_x_apriori[1];
-//						//	local_pos_est.y = x_y_apriori[0];
-//						//	local_pos_est.vy = x_y_apriori[1];
-//						//	orb_publish(ORB_ID(vehicle_local_position), local_pos_est_pub, &local_pos_est);
-//						//}else{
-//						//	warnx("NaN in pos/vel estimator!");
-//						//}
-//					}else{
-//						/* set position to vicon pos and velocities to zero when not flying*/
-//						local_pos_est.x = vicon_pos.x;
-//						local_pos_est.vx = 0.0f;
-//						local_pos_est.y = vicon_pos.y;
-//						local_pos_est.vy = 0.0f;
-//						orb_publish(ORB_ID(vehicle_local_position), local_pos_est_pub, &local_pos_est);
-//					}
-//				}else{
-//					/* flying in manual mode */
-//					//printf("[position_estimator1D] MANUAL MODE\n");
-//				}
 			} /* end of poll call for vicon updates */
 		} /* end of poll return value check */
 	}

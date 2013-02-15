@@ -684,7 +684,7 @@ int sdlog_thread_main(int argc, char *argv[])
 					.bat_current = buf.batt.current_a,
 					.bat_discharged = buf.batt.discharged_mah,
 					.adc = {buf.raw.adc_voltage_v[0], buf.raw.adc_voltage_v[1], buf.raw.adc_voltage_v[2]},
-					.local_position = {buf.local_pos.x, buf.local_pos.y, buf.local_pos.z},
+					.local_position = {buf.local_pos.x, buf.local_pos.y, buf.local_pos.z, buf.local_pos.vx, buf.local_pos.vy, buf.local_pos.vz},
 					.gps_raw_position = {buf.gps_pos.lat, buf.gps_pos.lon, buf.gps_pos.alt},
 					.attitude = {buf.att.pitch, buf.att.roll, buf.att.yaw},
 					.rotMatrix = {buf.att.R[0][0], buf.att.R[0][1], buf.att.R[0][2], buf.att.R[1][0], buf.att.R[1][1], buf.att.R[1][2], buf.att.R[2][0], buf.att.R[2][1], buf.att.R[2][2]},

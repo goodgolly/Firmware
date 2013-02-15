@@ -46,7 +46,7 @@ struct position_estimator1D_params {
 	float QQ[3];
 	float sigma;
 	float R;
-	float useVicon;
+	float useGPS;
 	float accThres;
 	float flyingT;
 	float velDecay;
@@ -56,7 +56,7 @@ struct position_estimator1D_param_handles {
 	param_t q11, q22, q33;
 	param_t sigma;
 	param_t r;
-	param_t useVicon_param_handle;
+	param_t useGPS_param_handle;
 	param_t accThreshold_param_handle;
 	param_t flyingThreshold_param_handle;
 	param_t velDecay_param_handle;
