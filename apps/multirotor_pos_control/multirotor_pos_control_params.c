@@ -45,11 +45,11 @@
 
 /* controller parameters */
 PARAM_DEFINE_FLOAT(POS_XY_P, 0.25f);
-PARAM_DEFINE_FLOAT(MC_XY_D, 0.0f);
-PARAM_DEFINE_FLOAT(MC_Z_P, 0.1f);
-PARAM_DEFINE_FLOAT(MC_Z_D, 0.0f);
-PARAM_DEFINE_FLOAT(MC_Z_SP, -1.0f);
-PARAM_DEFINE_FLOAT(MC_POS_useBARO, 0.0f);
+PARAM_DEFINE_FLOAT(POS_XY_D, 0.0f);
+PARAM_DEFINE_FLOAT(POS_Z_P, 0.1f);
+PARAM_DEFINE_FLOAT(POS_Z_D, 0.0f);
+PARAM_DEFINE_FLOAT(POS_Z_SP, -1.0f);
+PARAM_DEFINE_FLOAT(POS_useBARO, 0.0f);
 
 int parameters_init(struct multirotor_position_control_param_handles *h)
 {

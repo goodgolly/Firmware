@@ -198,8 +198,8 @@ multirotor_pos_control_thread_main(int argc, char *argv[])
 
 	float pos_ctrl_gain_p = 0.8f;
 	float pos_ctrl_gain_d = 0.8f;
-	float z_ctrl_gain_p = 0.1f;
-	float z_ctrl_gain_d = 0.0f;
+	float z_ctrl_gain_p = 0.8f;
+	float z_ctrl_gain_d = 0.6f;
 	float z_pos_setpoint = -1.0f;
 
 	float pitch_limit = 0.33f;
@@ -341,7 +341,7 @@ multirotor_pos_control_thread_main(int argc, char *argv[])
 						/* THRUST REGLER, P mit Feedforward */
 						float z_vel_setpoint = 0.0f;
 						float z_pos_err_earth = (local_pos_est.z - z_pos_setpoint);
-						float z_vel_err_earth = -(local_pos_est.vz - z_vel_setpoint);
+						float z_vel_err_earth = (local_pos_est.vz - z_vel_setpoint);
 						float z_ctrl_thrust_err = z_pos_err_earth*z_ctrl_gain_p + z_vel_err_earth*z_ctrl_gain_d;
 						float z_ctrl_thrust_feedforward = 0.65f;
 						float z_ctrl_thrust = z_ctrl_thrust_feedforward + z_ctrl_thrust_err;
