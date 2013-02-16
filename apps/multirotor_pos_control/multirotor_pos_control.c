@@ -53,6 +53,7 @@
 #include <drivers/drv_hrt.h>
 #include <drivers/drv_tone_alarm.h>
 #include <uORB/uORB.h>
+#include <uORB/topics/sensor_combined.h>
 #include <uORB/topics/parameter_update.h>
 #include <uORB/topics/vehicle_status.h>
 #include <uORB/topics/vehicle_attitude.h>
@@ -168,9 +169,8 @@ multirotor_pos_control_thread_main(int argc, char *argv[])
 	struct debug_key_value_s dbg1 = { .key = "x", .value = 0.0f };
 	struct debug_key_value_s dbg2 = { .key = "vx", .value = 0.0f };
 
-	/* subscribe to param changes */
+	int sensor_sub = orb_subscribe(ORB_ID(sensor_combined));
 	int sub_params = orb_subscribe(ORB_ID(parameter_update));
-	/* subscribe to attitude, motor setpoints and system state */
 	int att_sub = orb_subscribe(ORB_ID(vehicle_attitude));
 	int state_sub = orb_subscribe(ORB_ID(vehicle_status));
 	int manual_sub = orb_subscribe(ORB_ID(manual_control_setpoint));
@@ -189,7 +189,8 @@ multirotor_pos_control_thread_main(int argc, char *argv[])
 	thread_running = true;
 
 	struct pollfd fds[2] = {
-					{ .fd = vicon_pos_sub, .events = POLLIN }, //vicon_pos_sub
+					//{ .fd = vicon_pos_sub, .events = POLLIN }, //vicon_pos_sub
+					{ .fd = sensor_sub, .events = POLLIN }, //ca. 70 Hz
 					{ .fd = sub_params,   .events = POLLIN },
 				};
 
@@ -206,8 +207,6 @@ multirotor_pos_control_thread_main(int argc, char *argv[])
 	float roll_limit = 0.33f;
 	float thrust_limit_upper = 0.5f;
 	float thrust_limit_lower = 0.1f;
-
-	bool useBARO = false;
 
 	struct multirotor_position_control_params pos_params;
 	struct multirotor_position_control_param_handles handle_pos_params;
@@ -251,8 +250,8 @@ multirotor_pos_control_thread_main(int argc, char *argv[])
 			}
 			/* only run controller if vicon changed */
 			if (fds[0].revents & POLLIN) {
-				float dT = (hrt_absolute_time() - last_time) / 1000000.0f;
-				last_time = hrt_absolute_time();
+				//float dT = (hrt_absolute_time() - last_time) / 1000000.0f;
+				//last_time = hrt_absolute_time();
 				//printf("[multirotor_att_control_main] dT: %8.4f\n", (double)(dT));
 
 				/* get a local copy of the vehicle state */
@@ -266,11 +265,6 @@ multirotor_pos_control_thread_main(int argc, char *argv[])
 				/* get a local copy of vicon_position */
 				orb_copy(ORB_ID(vehicle_vicon_position), vicon_pos_sub, &vicon_pos);
 				orb_copy(ORB_ID(vehicle_status), vehicle_status_sub, &vehicle_status);
-				//dbg1.value = x_k;
-				//orb_publish(ORB_ID(debug_key_value), pub_dbg1, &dbg1);
-				//dbg2.value = vx_k;
-				//orb_publish(ORB_ID(debug_key_value), pub_dbg2, &dbg2);
-				//printf("before auto  x: %8.4f\tvx: %8.4f\ty: %8.4f\tvy: %8.4f\n", (double)(x_k), (double)(vx_k), (double)(y_k), (double)(vy_k));
 
 				if (state.state_machine == SYSTEM_STATE_AUTO) {
 					if(state.flag_useGPS){
@@ -338,23 +332,27 @@ multirotor_pos_control_thread_main(int argc, char *argv[])
 						//att_sp.yaw_body = 0.0f;
 						//printf("[multirotor_pos_control] vicon_pos.yaw: %8.4f\n", (double)(vicon_pos.yaw));
 
-						/* THRUST REGLER, P mit Feedforward */
-						float z_vel_setpoint = 0.0f;
-						float z_pos_err_earth = (local_pos_est.z - z_pos_setpoint);
-						float z_vel_err_earth = (local_pos_est.vz - z_vel_setpoint);
-						float z_ctrl_thrust_err = z_pos_err_earth*z_ctrl_gain_p + z_vel_err_earth*z_ctrl_gain_d;
-						float z_ctrl_thrust_feedforward = 0.65f;
-						float z_ctrl_thrust = z_ctrl_thrust_feedforward + z_ctrl_thrust_err;
-						/* the throttle stick on the rc control limits the maximum thrust */
-						thrust_limit_upper = manual.throttle;
-						if (z_ctrl_thrust >= thrust_limit_upper){
-							z_ctrl_thrust = thrust_limit_upper;
-							/*never go too low with the thrust, quadrotor may become uncontrollable */
-						}else if(z_ctrl_thrust < thrust_limit_lower){
-							z_ctrl_thrust = thrust_limit_lower;
+						/* Z REGLER, PD mit Feedforward */
+						if(vehicle_status.flag_useBARO && vehicle_status.flag_baroINIT){
+
+						}else{
+							float z_vel_setpoint = 0.0f;
+							float z_pos_err_earth = (local_pos_est.z - z_pos_setpoint);
+							float z_vel_err_earth = (local_pos_est.vz - z_vel_setpoint);
+							float z_ctrl_thrust_err = z_pos_err_earth*z_ctrl_gain_p + z_vel_err_earth*z_ctrl_gain_d;
+							float z_ctrl_thrust_feedforward = 0.65f;
+							float z_ctrl_thrust = z_ctrl_thrust_feedforward + z_ctrl_thrust_err;
+							/* the throttle stick on the rc control limits the maximum thrust */
+							thrust_limit_upper = manual.throttle;
+							if (z_ctrl_thrust >= thrust_limit_upper){
+								z_ctrl_thrust = thrust_limit_upper;
+								/*never go too low with the thrust, quadrotor may become uncontrollable */
+							}else if(z_ctrl_thrust < thrust_limit_lower){
+								z_ctrl_thrust = thrust_limit_lower;
+							}
+							//printf("[multirotor_att_control_main] height_ctrl_thrust: %8.4f\n", (double)(height_ctrl_thrust));
+							att_sp.thrust = z_ctrl_thrust;
 						}
-						//printf("[multirotor_att_control_main] height_ctrl_thrust: %8.4f\n", (double)(height_ctrl_thrust));
-						att_sp.thrust = z_ctrl_thrust;
 						att_sp.timestamp = hrt_absolute_time();
 
 						/* publish new attitude setpoint */
