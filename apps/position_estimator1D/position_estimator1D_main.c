@@ -177,15 +177,15 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 	//bool velocity_observe_y = 0;
 	//bool gps_update = 0;
 	//bool stateFlying = 0;
-	//bool useGPS = true;
 	bool gps_valid = false;
 	static float z[3] = {0, 0, 0}; /* output variables from tangent plane mapping */
 
 	float x_x_aposteriori_k[3] = {1.0f, 0.0f, 0.0f};
 	float x_y_aposteriori_k[3] = {1.0f, 0.0f, 0.0f};
-
+	float x_z_aposteriori_k[3] = {1.0f, 0.0f, 0.0f};
 	float x_x_aposteriori[3] = {0.0f, 0.0f, 0.0f};
 	float x_y_aposteriori[3] = {1.0f, 0.0f, 0.0f};
+	float x_z_aposteriori[3] = {1.0f, 0.0f, 0.0f};
 
 	//static float P_x_apriori[9] = {100.0f, 0.0f, 0.0f,
 	//					   0.0f, 100.0f, 0.0f,
@@ -198,29 +198,9 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 	//static float P_y_aposteriori[9] = {0.0f ,0.0f, 0.0f, 0.0f ,0.0f, 0.0f, 0.0f ,0.0f, 0.0f};
 
 	const float dT_const = 1.0f/120.0f;
-	const float ampl = 2.5f;
 	const float st = 0.5f*dT_const*dT_const;
 
-	const float Ad[9] = {1.0f, dT_const, st,
-				   0.0f, 1.0f, dT_const,
-				   0.0f, 0.0f, 1.0f};
-
-	const float Adtransponiert[9] = 	{1.0f, 0.0f, 0.0f,
-								dT_const, 1.0f, 0.0f,
-								st, dT_const, 1.0f};
-	//float Bd[3] = {0.5f*dT_const*dT_const, dT_const, 0.0f};
-	const float Cd[3] = {1.0f, 0.0f, 0.0f};
-	//const float cv = dT_const*dT_const*ampl*ampl;
-	//const float cv2 = 1.0f;
-	//const float mp = 0.000001f;
-
-	//float Q[9] = {cv*st*st, cv*st*dT_const, cv*st,
-	//			  cv*dT_const*st,cv*dT_const*dT_const, cv*dT_const,
-	//			  cv*st, cv*dT_const, cv};
-
-	//float R = mp;
-
-	//computed from dlqe
+	//computed from dlqe in matlab
 	const float K[3] = {0.2151f, 2.9154f, 19.7599f};
 
 	float acc_x_body = 0.0f;
@@ -231,9 +211,6 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 	float acc_y_e = 0.0f;
 	float acc_z_e = 0.0f;
 
-	float z_x = 0.0f;
-	float z_y = 0.0f;
-
 	float flyingT = 200.0f;
 
 	float accThres = 0.001f;
@@ -241,9 +218,6 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 
 	float rotMatrix[4] = {1.0f,  0.0f,
 						  0.0f,  1.0f};
-
-	int loopcounter = 0;
-	int debugCNT = 0;
 
 	static double lat_current = 0.0d; //[°]] --> 47.0
 	static double lon_current = 0.0d; //[°]] -->8.5
@@ -283,7 +257,6 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 
 	//struct debug_key_value_s dbg1 = { .key = "dbg:x_pos_err", .value = 0.0f };
 	//struct debug_key_value_s dbg2 = { .key = "dbg:y_pos_err", .value = 0.0f };
-
 	//orb_advert_t pub_dbg1 = orb_advertise(ORB_ID(debug_key_value), &dbg1);
 	//orb_advert_t pub_dbg2 = orb_advertise(ORB_ID(debug_key_value), &dbg2);
 
@@ -305,11 +278,11 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 	parameters_update(&pos1D_param_handles, &pos1D_params);
 	float useGPStemp = pos1D_params.useGPS;
 	if(useGPStemp == 0.0f){
-		//useGPS = false;
 		vehicle_status.flag_useGPS = false;
 	}else if(useGPStemp == 1.0f){
 		vehicle_status.flag_useGPS = true;
 	}
+	orb_publish(ORB_ID(vehicle_status), vehicle_status_sub, &vehicle_status);
 
 	if(vehicle_status.flag_useGPS){
 		mavlink_log_info(mavlink_fd, "We are using GPS");
@@ -342,8 +315,8 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 					parameters_update(&pos1D_param_handles, &pos1D_params);
 					float useGPStemp = pos1D_params.useGPS;
 					if(useGPStemp == 0.0f){
-						//useGPS = false;
 						vehicle_status.flag_useGPS = false;
+						orb_publish(ORB_ID(vehicle_status), vehicle_status_sub, &vehicle_status);
 						break; /* leave gps fix type 3 while loop */
 					}
 				}
@@ -397,20 +370,19 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 				/* read from param to clear updated flag */
 				struct parameter_update_s update;
 				orb_copy(ORB_ID(parameter_update), sub_params, &update);
-
 				/* update parameters */
 				parameters_update(&pos1D_param_handles, &pos1D_params);
-
 				float useGPStemp = pos1D_params.useGPS;
 				if(useGPStemp == 0.0f){
 					vehicle_status.flag_useGPS = false;
 				}else if(useGPStemp == 1.0f){
 					vehicle_status.flag_useGPS = true;
 				}
+				orb_publish(ORB_ID(vehicle_status), vehicle_status_sub, &vehicle_status);
 				velDecay = pos1D_params.velDecay;
 				flyingT = pos1D_params.flyingT;
 				accThres = pos1D_params.accThres;
-				printf("[position_estimator1D] updated parameter: %8.4f\n", accThres);
+				//printf("[position_estimator1D] updated parameter: %8.4f\n", accThres);
 			}
 			if (fds[0].revents & POLLIN) {
 				/* obtained data for the first file descriptor */
@@ -444,10 +416,14 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 					memcpy(x_x_aposteriori_k, x_x_aposteriori, sizeof(x_x_aposteriori));
 					kalman_dlqe2(dT_const,K[0],K[1],K[2],x_y_aposteriori_k,vicon_pos.y,x_y_aposteriori);
 					memcpy(x_y_aposteriori_k, x_y_aposteriori, sizeof(x_y_aposteriori));
+					kalman_dlqe2(dT_const,K[0],K[1],K[2],x_z_aposteriori_k,vicon_pos.z,x_z_aposteriori);
+					memcpy(x_z_aposteriori_k, x_z_aposteriori, sizeof(x_z_aposteriori));
 					local_pos_est.x = x_x_aposteriori_k[0];
 					local_pos_est.vx = x_x_aposteriori_k[1];
 					local_pos_est.y = x_y_aposteriori_k[0];
 					local_pos_est.vy = x_y_aposteriori_k[1];
+					local_pos_est.z = x_z_aposteriori_k[0];
+					local_pos_est.vz = x_z_aposteriori_k[1];
 					local_pos_est.timestamp = hrt_absolute_time();
 					orb_publish(ORB_ID(vehicle_local_position), local_pos_est_pub, &local_pos_est);
 					//printf("[dqle2] x: %8.4f\t %8.4f\t y: %8.4f\t %8.4f\n", (double)(x_x_aposteriori[0]),(double)(x_x_aposteriori[1]), (double)(x_y_aposteriori[0]), (double)(x_y_aposteriori[1]));
