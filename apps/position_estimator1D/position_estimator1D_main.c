@@ -177,9 +177,9 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 	//bool velocity_observe_y = 0;
 	//bool gps_update = 0;
 	//bool stateFlying = 0;
-	bool useGPS = true;
+	//bool useGPS = true;
 	bool gps_valid = false;
-	static float z[3] = {0, 0, 0};
+	static float z[3] = {0, 0, 0}; /* output variables from tangent plane mapping */
 
 	float x_x_aposteriori_k[3] = {1.0f, 0.0f, 0.0f};
 	float x_y_aposteriori_k[3] = {1.0f, 0.0f, 0.0f};
@@ -298,40 +298,78 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 
 	uint64_t last_time = 0;
 
-	if(useGPS){
+	/* first check the useGPS flag setting */
+	struct parameter_update_s update;
+	orb_copy(ORB_ID(parameter_update), sub_params, &update);
+	/* update parameters */
+	parameters_update(&pos1D_param_handles, &pos1D_params);
+	float useGPStemp = pos1D_params.useGPS;
+	if(useGPStemp == 0.0f){
+		//useGPS = false;
+		vehicle_status.flag_useGPS = false;
+	}else if(useGPStemp == 1.0f){
+		vehicle_status.flag_useGPS = true;
+	}
+
+	if(vehicle_status.flag_useGPS){
 		mavlink_log_info(mavlink_fd, "We are using GPS");
 		/* wait until gps signal turns valid, only then can we initialize the projection */
 		while (gps.fix_type < 3) {
-			struct pollfd fds[1] = { {.fd = vehicle_gps_sub, .events = POLLIN} };
+			struct pollfd fds[2] = {
+					{ .fd = vehicle_gps_sub, .events = POLLIN },
+					{ .fd = sub_params,   .events = POLLIN },
+			};
 
 			/* wait for GPS updates, BUT READ VEHICLE STATUS (!)
 			 * this choice is critical, since the vehicle status might not
 			 * actually change, if this app is started after GPS lock was
 			 * aquired.
 			 */
-			if (poll(fds, 1, 5000)) {
-				/* Wait for the GPS update to propagate (we have some time) */
-				usleep(5000);
-				/* Read wether the vehicle status changed */
-				orb_copy(ORB_ID(vehicle_gps_position), vehicle_gps_sub, &gps);
-				gps_valid = (gps.fix_type > 2);
+			if (poll(fds, 2, 5000)) {
+				if (fds[0].revents & POLLIN){
+					/* Wait for the GPS update to propagate (we have some time) */
+					usleep(5000);
+					/* Read wether the vehicle status changed */
+					orb_copy(ORB_ID(vehicle_gps_position), vehicle_gps_sub, &gps);
+					gps_valid = (gps.fix_type > 2);
+				}
+				if (fds[1].revents & POLLIN){
+					/* Read out parameters to check for an update there, e.g. useGPS variable */
+					/* read from param to clear updated flag */
+					struct parameter_update_s update;
+					orb_copy(ORB_ID(parameter_update), sub_params, &update);
+					/* update parameters */
+					parameters_update(&pos1D_param_handles, &pos1D_params);
+					float useGPStemp = pos1D_params.useGPS;
+					if(useGPStemp == 0.0f){
+						//useGPS = false;
+						vehicle_status.flag_useGPS = false;
+						break; /* leave gps fix type 3 while loop */
+					}
+				}
 			}
-			printf("wait for fix type 3");
+			static int printcounter = 0;
+			if (printcounter == 100) {
+				printcounter = 0;
+				printf("wait for GPS fix type 3\n");
+			}
+			printcounter++;
 		}
 
-		/* get gps value for first initialization */
-		orb_copy(ORB_ID(vehicle_gps_position), vehicle_gps_sub, &gps);
-		lat_current = ((double)(gps.lat)) * 1e-7;
-		lon_current = ((double)(gps.lon)) * 1e-7;
-		alt_current = gps.alt * 1e-3;
-
-		/* initialize coordinates */
-		map_projection_init(lat_current, lon_current);
-
-		/* publish global position messages only after first GPS message */
-		printf("[multirotor position estimator] initialized projection with: lat: %.10f,  lon:%.10f\n", lat_current, lon_current);
+		/* check again if useGPS was not aborted and only if not set up tangent plane map initialization*/
+		if(vehicle_status.flag_useGPS){
+			/* get gps value for first initialization */
+			orb_copy(ORB_ID(vehicle_gps_position), vehicle_gps_sub, &gps);
+			lat_current = ((double)(gps.lat)) * 1e-7;
+			lon_current = ((double)(gps.lon)) * 1e-7;
+			alt_current = gps.alt * 1e-3;
+			/* initialize coordinates */
+			map_projection_init(lat_current, lon_current);
+			/* publish global position messages only after first GPS message */
+			printf("[multirotor position estimator] initialized projection with: lat: %.10f,  lon:%.10f\n", lat_current, lon_current);
+		}
 	}else{
-		mavlink_log_info(mavlink_fd, "We are NOT using GPS");
+		mavlink_log_info(mavlink_fd, "We are NOT using GPS - We use VICON");
 		/* onboard calculated position estimations */
 	}
 	struct vehicle_local_position_s local_pos_est = {
@@ -362,21 +400,12 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 
 				/* update parameters */
 				parameters_update(&pos1D_param_handles, &pos1D_params);
-				//Q[0] = pos1D_params.QQ[0];
-				//Q[1] = 0.0f;
-				//Q[2] = 0.0f;
-				//Q[3] = 0.0f;
-				//Q[4] = pos1D_params.QQ[1];
-				//Q[5] = 0.0f;
-				//Q[6] = 0.0f;
-				//Q[7] = 0.0f;
-				//Q[8] = pos1D_params.QQ[2];
-				//R = pos1D_params.R;
+
 				float useGPStemp = pos1D_params.useGPS;
 				if(useGPStemp == 0.0f){
-					useGPS = false;
+					vehicle_status.flag_useGPS = false;
 				}else if(useGPStemp == 1.0f){
-					useGPS = true;
+					vehicle_status.flag_useGPS = true;
 				}
 				velDecay = pos1D_params.velDecay;
 				flyingT = pos1D_params.flyingT;
@@ -390,7 +419,7 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 				orb_copy(ORB_ID(actuator_controls_effective_0), actuator_eff_sub, &act_eff);
 				orb_copy(ORB_ID(vehicle_attitude), vehicle_attitude_sub, &att);
 				orb_copy(ORB_ID(vehicle_status), vehicle_status_sub, &vehicle_status);
-				if(useGPS){
+				if(vehicle_status.flag_useGPS){
 					/* get a local copy of gps position */
 					orb_copy(ORB_ID(vehicle_gps_position), vehicle_gps_sub, &gps);
 				}else{
@@ -398,7 +427,7 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 					orb_copy(ORB_ID(vehicle_vicon_position), vicon_pos_sub, &vicon_pos);
 				}
 
-				if(useGPS){
+				if(vehicle_status.flag_useGPS){
 					/* initialize map projection with the last estimate (not at full rate) */
 					if (gps.fix_type > 2) {
 						/* Project gps lat lon (Geographic coordinate system) to plane*/
@@ -410,6 +439,7 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 						orb_publish(ORB_ID(vehicle_local_position), local_pos_est_pub, &local_pos_est);
 					}
 				}else{
+					/* pos/vel gathered in earth frame = vicon frame */
 					kalman_dlqe2(dT_const,K[0],K[1],K[2],x_x_aposteriori_k,vicon_pos.x,x_x_aposteriori);
 					memcpy(x_x_aposteriori_k, x_x_aposteriori, sizeof(x_x_aposteriori));
 					kalman_dlqe2(dT_const,K[0],K[1],K[2],x_y_aposteriori_k,vicon_pos.y,x_y_aposteriori);
@@ -422,13 +452,6 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 					orb_publish(ORB_ID(vehicle_local_position), local_pos_est_pub, &local_pos_est);
 					//printf("[dqle2] x: %8.4f\t %8.4f\t y: %8.4f\t %8.4f\n", (double)(x_x_aposteriori[0]),(double)(x_x_aposteriori[1]), (double)(x_y_aposteriori[0]), (double)(x_y_aposteriori[1]));
 				}
-
-				static int printcounter = 0;
-				if (printcounter == 200) {
-					printcounter = 0;
-					printf("local_pos_est x: %d cm\ty: %d cm\n", (int)(local_pos_est.x*100), (int)(local_pos_est.y*100));
-				}
-				printcounter++;
 			} /* end of poll call for vicon updates */
 		} /* end of poll return value check */
 	}

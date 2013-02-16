@@ -49,6 +49,7 @@ struct multirotor_position_control_params {
 	float height_sp;
 	float k1;
 	float k2;
+	float useBARO;
 };
 
 struct multirotor_position_control_param_handles {
@@ -59,6 +60,7 @@ struct multirotor_position_control_param_handles {
 	param_t height_sp;
 	param_t k1;
 	param_t k2;
+	param_t useBARO;
 };
 
 /**

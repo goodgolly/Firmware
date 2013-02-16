@@ -50,7 +50,7 @@ PARAM_DEFINE_FLOAT(MC_HI_P, 0.1f);
 PARAM_DEFINE_FLOAT(MC_HI_SP, -0.5f);
 PARAM_DEFINE_FLOAT(MC_POS_K1, 1.0f);
 PARAM_DEFINE_FLOAT(MC_POS_K2, 1.0f);
-
+PARAM_DEFINE_FLOAT(MC_POS_useBARO, 0.0f);
 
 int parameters_init(struct multirotor_position_control_param_handles *h)
 {
@@ -61,6 +61,7 @@ int parameters_init(struct multirotor_position_control_param_handles *h)
 	h->height_sp =  param_find("MC_HI_SP");
 	h->k1 =  param_find("MC_POS_K1");
 	h->k2 =  param_find("MC_POS_K2");
+	h->useBARO =  param_find("MC_POS_useBARO");
 	return OK;
 }
 
@@ -72,5 +73,6 @@ int parameters_update(const struct multirotor_position_control_param_handles *h,
 	param_get(h->height_sp, &(p->height_sp));
 	param_get(h->k1, &(p->k1));
 	param_get(h->k2, &(p->k2));
+	param_get(h->useBARO, &(p->useBARO));
 	return OK;
 }
