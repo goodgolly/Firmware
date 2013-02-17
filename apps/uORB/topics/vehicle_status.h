@@ -212,7 +212,7 @@ struct vehicle_status_s
 	bool flag_home_position_set;			/**< Indicates the home position has been set (not necessarily a valid launch position) */
 	bool flag_useGPS;						/**< Indicates Globally if GPS is in use or Vicon is used */
 	bool flag_useBARO;						/**< Indicates Globally if barometric pressure sensor is used */
-	bool flag_baroINIT;						/**< Indicates that initial barometric pressure is measured */
+	bool flag_baroINITdone;						/**< Indicates that initial barometric pressure is measured */
 };
 
 /**

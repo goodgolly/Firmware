@@ -156,23 +156,25 @@ multirotor_pos_control_thread_main(int argc, char *argv[])
 	mavlink_log_info(mavlink_fd, "[multirotor pos control] Control started, taking over position control\n");
 
 	/* structures */
-	struct vehicle_status_s state;
 	struct vehicle_attitude_s att;
+	memset(&att, 0, sizeof(att));
 	//struct vehicle_global_position_setpoint_s global_pos_sp;
 	//struct vehicle_local_position_setpoint_s local_pos_sp;
 	struct vehicle_local_position_s local_pos_est;
+	memset(&local_pos_est, 0, sizeof(local_pos_est));
 	struct vehicle_vicon_position_s vicon_pos;
+	memset(&vicon_pos, 0, sizeof(vicon_pos));
 	struct manual_control_setpoint_s manual;
+	memset(&manual, 0, sizeof(manual));
 	struct vehicle_attitude_setpoint_s att_sp;
+	memset(&att_sp, 0, sizeof(att_sp));
 	struct vehicle_status_s vehicle_status;
+	memset(&vehicle_status, 0, sizeof(vehicle_status));
 
-	struct debug_key_value_s dbg1 = { .key = "x", .value = 0.0f };
-	struct debug_key_value_s dbg2 = { .key = "vx", .value = 0.0f };
-
+	/* subscribe */
 	int sensor_sub = orb_subscribe(ORB_ID(sensor_combined));
 	int sub_params = orb_subscribe(ORB_ID(parameter_update));
 	int att_sub = orb_subscribe(ORB_ID(vehicle_attitude));
-	int state_sub = orb_subscribe(ORB_ID(vehicle_status));
 	int manual_sub = orb_subscribe(ORB_ID(manual_control_setpoint));
 	int vicon_pos_sub = orb_subscribe(ORB_ID(vehicle_vicon_position));
 	//int global_pos_sp_sub = orb_subscribe(ORB_ID(vehicle_global_position_setpoint));
@@ -183,30 +185,19 @@ multirotor_pos_control_thread_main(int argc, char *argv[])
 	/* publish attitude setpoint */
 	orb_advert_t att_sp_pub = orb_advertise(ORB_ID(vehicle_attitude_setpoint), &att_sp);
 
-	orb_advert_t pub_dbg1 = orb_advertise(ORB_ID(debug_key_value), &dbg1);
-	orb_advert_t pub_dbg2 = orb_advertise(ORB_ID(debug_key_value), &dbg2);
+	static float rotMatrix[4] = {1.0f,  0.0f,
+								0.0f,  1.0f};
 
-	thread_running = true;
+	static float pos_ctrl_gain_p = 0.8f;
+	static float pos_ctrl_gain_d = 0.8f;
+	static float z_ctrl_gain_p = 0.8f;
+	static float z_ctrl_gain_d = 0.6f;
+	static float z_pos_setpoint = -1.0f;
 
-	struct pollfd fds[2] = {
-					//{ .fd = vicon_pos_sub, .events = POLLIN }, //vicon_pos_sub
-					{ .fd = sensor_sub, .events = POLLIN }, //ca. 70 Hz
-					{ .fd = sub_params,   .events = POLLIN },
-				};
-
-	float rotMatrix[4] = {1.0f,  0.0f,
-						  0.0f,  1.0f};
-
-	float pos_ctrl_gain_p = 0.8f;
-	float pos_ctrl_gain_d = 0.8f;
-	float z_ctrl_gain_p = 0.8f;
-	float z_ctrl_gain_d = 0.6f;
-	float z_pos_setpoint = -1.0f;
-
-	float pitch_limit = 0.33f;
-	float roll_limit = 0.33f;
-	float thrust_limit_upper = 0.5f;
-	float thrust_limit_lower = 0.1f;
+	const float pitch_limit = 0.33f;
+	const float roll_limit = 0.33f;
+	const float thrust_limit_upper = 0.5f;
+	const float thrust_limit_lower = 0.1f;
 
 	struct multirotor_position_control_params pos_params;
 	struct multirotor_position_control_param_handles handle_pos_params;
@@ -216,156 +207,146 @@ multirotor_pos_control_thread_main(int argc, char *argv[])
 	perf_counter_t interval_perf = perf_alloc(PC_INTERVAL, "multirotor_pos_control_interval");
 	perf_counter_t mc_err_perf = perf_alloc(PC_COUNT, "multirotor_pos_control_err");
 
+	struct pollfd fds[2] = {
+					{ .fd = vicon_pos_sub, .events = POLLIN }, //vicon_pos_sub
+					//{ .fd = sensor_sub, .events = POLLIN }, //ca. 70 Hz
+					{ .fd = sub_params,   .events = POLLIN },
+				};
+
+	thread_running = true;
 	uint64_t last_time = 0;
 
 	while (!thread_should_exit) {
 		/* wait for a vicon update update, check for exit condition every 500 ms */
-		int ret = poll(fds, 2, 500);
-
-		if (ret < 0) {
-			/* poll error, count it in perf */
-			perf_count(mc_err_perf);
-		} else if (ret == 0) {
-			/* no return value, ignore */
-		} else {
-			if (fds[1].revents & POLLIN){
-				/* read from param to clear updated flag */
-				struct parameter_update_s update;
-				orb_copy(ORB_ID(parameter_update), sub_params, &update);
-				/* update parameters */
-				parameters_update(&handle_pos_params, &pos_params);
-				pos_ctrl_gain_d = pos_params.pos_d;
-				pos_ctrl_gain_p = pos_params.pos_p;
-				z_ctrl_gain_p = pos_params.height_p;
-				z_ctrl_gain_d = pos_params.height_d;
-				z_pos_setpoint = pos_params.height_sp;
-				float useBAROtemp = pos_params.useBARO;
-				if(useBAROtemp == 0.0f){
-					vehicle_status.flag_useBARO = false;
-				}else if(useBAROtemp == 1.0f){
-					vehicle_status.flag_useBARO = true;
-				}
-				orb_publish(ORB_ID(vehicle_status), vehicle_status_sub, &vehicle_status);
-				//printf("[multirotor_pos_control] pos_params.k1: %8.4f\t pos.params.k2: %8.4f\n", (double)(pos_params.k1), (double)(pos_params.k2));
-			}
-			/* only run controller if vicon changed */
-			if (fds[0].revents & POLLIN) {
-				//float dT = (hrt_absolute_time() - last_time) / 1000000.0f;
-				//last_time = hrt_absolute_time();
-				//printf("[multirotor_att_control_main] dT: %8.4f\n", (double)(dT));
-
-				/* get a local copy of the vehicle state */
-				orb_copy(ORB_ID(vehicle_status), state_sub, &state);
-				/* get a local copy of manual setpoint */
-				orb_copy(ORB_ID(manual_control_setpoint), manual_sub, &manual);
-				/* get a local copy of attitude */
-				orb_copy(ORB_ID(vehicle_attitude), att_sub, &att);
-				/* get a local copy of local position */
-				orb_copy(ORB_ID(vehicle_local_position), local_pos_est_sub, &local_pos_est);
-				/* get a local copy of vicon_position */
-				orb_copy(ORB_ID(vehicle_vicon_position), vicon_pos_sub, &vicon_pos);
-				orb_copy(ORB_ID(vehicle_status), vehicle_status_sub, &vehicle_status);
-
-				if (state.state_machine == SYSTEM_STATE_AUTO) {
-					if(state.flag_useGPS){
-						/* all GPS control here */
-					}else{
-						/* all VICON control here */
-						static int printcounter = 0;
-						if (printcounter == 50) {
-							printcounter = 0;
-							//printf("after auto state x: %d cm\ty: %d cm\n", (int)(local_pos_est.x*100), (int)(local_pos_est.y*100));
-						}
-						printcounter++;
-						/* ROLL & PITCH REGLER */
-						float y_pos_setpoint = 0.0f;
-						float x_pos_setpoint = 0.0f;
-						float y_pos_err_earth = -(local_pos_est.y - y_pos_setpoint);
-						float x_pos_err_earth = (local_pos_est.x - x_pos_setpoint);
-						float y_vel_setpoint = 0.0f;
-						float x_vel_setpoint = 0.0f;
-						float y_vel_err_earth = -(local_pos_est.vy - y_vel_setpoint);
-						float x_vel_err_earth = (local_pos_est.vx - x_vel_setpoint);
-						/* rotMatrix is from body to earth*/
-						rotMatrix[0] = cos(vicon_pos.yaw);
-						rotMatrix[1] = -sin(vicon_pos.yaw);
-						rotMatrix[2] = sin(vicon_pos.yaw);
-						rotMatrix[3] = cos(vicon_pos.yaw);
-						/* PD regler im earth frame, different sign because of Transformation from earth to body frame */
-						float rollpos = (rotMatrix[0]*y_pos_err_earth-rotMatrix[1]*x_pos_err_earth)*pos_ctrl_gain_p;
-						float rollvel = (rotMatrix[0]*y_vel_err_earth-rotMatrix[1]*x_vel_err_earth)*pos_ctrl_gain_d;
-						float pitchpos = (-rotMatrix[2]*y_pos_err_earth+rotMatrix[3]*x_pos_err_earth)*pos_ctrl_gain_p;
-						float pitchvel = (-rotMatrix[2]*y_vel_err_earth+rotMatrix[3]*x_vel_err_earth)*pos_ctrl_gain_d;
-						float rolltot = rollpos + rollvel;
-						float pitchtot = pitchpos + pitchvel;
-
-						/* limit setpoints to maximal the values of the manual flight*/
-						if((rolltot <= roll_limit) && (rolltot >= -roll_limit)){
-							att_sp.roll_body = rolltot;
-						}else{
-							if(rolltot > roll_limit){
-								att_sp.roll_body = roll_limit;
-							}
-							if(rolltot < -roll_limit){
-								att_sp.roll_body = -roll_limit;
-							}
-						}
-						if((pitchtot <= pitch_limit) && (pitchtot >= -pitch_limit)){
-							att_sp.pitch_body = pitchtot;
-						}else{
-							if(pitchtot > pitch_limit){
-								att_sp.pitch_body = pitch_limit;
-							}
-							if(pitchtot < -pitch_limit){
-								att_sp.pitch_body = -pitch_limit;
-							}
-						}
-						/* checked that limitation works correctly */
-						//printf("[multirotor_att_control_main] att_sp.roll_body: %8.4f\n", (double)(att_sp.roll_body));
-
-						/* YAW REGLER */
-						if ((manual.yaw < -0.01f || 0.01f < manual.yaw) && manual.throttle > 0.3f) {
-						att_sp.yaw_body = att_sp.yaw_body + manual.yaw * 0.0025f;
-						} else if (manual.throttle <= 0.3f) {
-						att_sp.yaw_body = att.yaw;
-						}
-						//att_sp.yaw_body = 0.0f;
-						//printf("[multirotor_pos_control] vicon_pos.yaw: %8.4f\n", (double)(vicon_pos.yaw));
-
-						/* Z REGLER, PD mit Feedforward */
-						if(vehicle_status.flag_useBARO && vehicle_status.flag_baroINIT){
-
-						}else{
-							float z_vel_setpoint = 0.0f;
-							float z_pos_err_earth = (local_pos_est.z - z_pos_setpoint);
-							float z_vel_err_earth = (local_pos_est.vz - z_vel_setpoint);
-							float z_ctrl_thrust_err = z_pos_err_earth*z_ctrl_gain_p + z_vel_err_earth*z_ctrl_gain_d;
-							float z_ctrl_thrust_feedforward = 0.65f;
-							float z_ctrl_thrust = z_ctrl_thrust_feedforward + z_ctrl_thrust_err;
-							/* the throttle stick on the rc control limits the maximum thrust */
-							thrust_limit_upper = manual.throttle;
-							if (z_ctrl_thrust >= thrust_limit_upper){
-								z_ctrl_thrust = thrust_limit_upper;
-								/*never go too low with the thrust, quadrotor may become uncontrollable */
-							}else if(z_ctrl_thrust < thrust_limit_lower){
-								z_ctrl_thrust = thrust_limit_lower;
-							}
-							//printf("[multirotor_att_control_main] height_ctrl_thrust: %8.4f\n", (double)(height_ctrl_thrust));
-							att_sp.thrust = z_ctrl_thrust;
-						}
-						att_sp.timestamp = hrt_absolute_time();
-
-						/* publish new attitude setpoint */
-						orb_publish(ORB_ID(vehicle_attitude_setpoint), att_sp_pub, &att_sp);
-
-						/* measure in what intervals the controller runs */
-						perf_count(interval_perf);
-					} /* end state.flag_useGPS check*/
+				int ret = poll(fds, 2, 2000);
+				if (ret < 0) {
+					/* poll error, count it in perf */
+					perf_count(mc_err_perf);
+				} else if (ret == 0) {
+					/* no return value, ignore */
 				} else {
-					//manual control
-				}
-			} /* end of poll call for vicon updates */
-		} /* end of poll return value check */
+					if (fds[1].revents & POLLIN){
+						/* read from param to clear updated flag */
+						struct parameter_update_s update;
+						orb_copy(ORB_ID(parameter_update), sub_params, &update);
+						/* update parameters */
+						parameters_update(&handle_pos_params, &pos_params);
+						pos_ctrl_gain_d = pos_params.pos_d;
+						pos_ctrl_gain_p = pos_params.pos_p;
+						z_ctrl_gain_p = pos_params.height_p;
+						z_ctrl_gain_d = pos_params.height_d;
+						z_pos_setpoint = pos_params.height_sp;
+						//printf("[multirotor_pos_control] pos_params.k1: %8.4f\t pos.params.k2: %8.4f\n", (double)(pos_params.k1), (double)(pos_params.k2));
+					}
+					/* only run controller if vicon / sensors changed */
+					if (fds[0].revents & POLLIN) {
+						//float dT = (hrt_absolute_time() - last_time) / 1000000.0f;
+						//last_time = hrt_absolute_time();
+						//printf("[multirotor_att_control_main] dT: %8.4f\n", (double)(dT));
+
+						orb_copy(ORB_ID(manual_control_setpoint), manual_sub, &manual);
+						orb_copy(ORB_ID(vehicle_attitude), att_sub, &att);
+						orb_copy(ORB_ID(vehicle_local_position), local_pos_est_sub, &local_pos_est);
+						orb_copy(ORB_ID(vehicle_vicon_position), vicon_pos_sub, &vicon_pos);
+						orb_copy(ORB_ID(vehicle_status), vehicle_status_sub, &vehicle_status);
+
+						/*static int printcounter = 0;
+						if (printcounter == 50000) {
+							printcounter = 0;
+							printf("[posCTRL] bool vehicle_status.useBARO: %s\n", (vehicle_status.flag_useBARO)? "true" : "false");
+						}
+						printcounter++;*/
+
+						if (vehicle_status.state_machine == SYSTEM_STATE_AUTO) {
+							//if(state.flag_useGPS){
+								/* all GPS control here */
+							//}else{
+								/* all VICON control here */
+								/* ROLL & PITCH REGLER */
+								float y_pos_setpoint = 0.0f;
+								float x_pos_setpoint = 0.0f;
+								float y_pos_err_earth = -(local_pos_est.y - y_pos_setpoint);
+								float x_pos_err_earth = (local_pos_est.x - x_pos_setpoint);
+								float y_vel_setpoint = 0.0f;
+								float x_vel_setpoint = 0.0f;
+								float y_vel_err_earth = -(local_pos_est.vy - y_vel_setpoint);
+								float x_vel_err_earth = (local_pos_est.vx - x_vel_setpoint);
+								/* rotMatrix is from body to earth*/
+								rotMatrix[0] = cos(vicon_pos.yaw);
+								rotMatrix[1] = -sin(vicon_pos.yaw);
+								rotMatrix[2] = sin(vicon_pos.yaw);
+								rotMatrix[3] = cos(vicon_pos.yaw);
+								/* PD regler im earth frame, different sign because of Transformation from earth to body frame */
+								float rollpos = (rotMatrix[0]*y_pos_err_earth-rotMatrix[1]*x_pos_err_earth)*pos_ctrl_gain_p;
+								float rollvel = (rotMatrix[0]*y_vel_err_earth-rotMatrix[1]*x_vel_err_earth)*pos_ctrl_gain_d;
+								float pitchpos = (-rotMatrix[2]*y_pos_err_earth+rotMatrix[3]*x_pos_err_earth)*pos_ctrl_gain_p;
+								float pitchvel = (-rotMatrix[2]*y_vel_err_earth+rotMatrix[3]*x_vel_err_earth)*pos_ctrl_gain_d;
+								float rolltot = rollpos + rollvel;
+								float pitchtot = pitchpos + pitchvel;
+
+								/* limit setpoints to maximal the values of the manual flight*/
+								if((rolltot <= roll_limit) && (rolltot >= -roll_limit)){
+									att_sp.roll_body = rolltot;
+								}else{
+									if(rolltot > roll_limit){
+										att_sp.roll_body = roll_limit;
+									}
+									if(rolltot < -roll_limit){
+										att_sp.roll_body = -roll_limit;
+									}
+								}
+								if((pitchtot <= pitch_limit) && (pitchtot >= -pitch_limit)){
+									att_sp.pitch_body = pitchtot;
+								}else{
+									if(pitchtot > pitch_limit){
+										att_sp.pitch_body = pitch_limit;
+									}
+									if(pitchtot < -pitch_limit){
+										att_sp.pitch_body = -pitch_limit;
+									}
+								}
+								/* checked that limitation works correctly */
+								//printf("[multirotor_att_control_main] att_sp.roll_body: %8.4f\n", (double)(att_sp.roll_body));
+
+								/* YAW REGLER */
+								if ((manual.yaw < -0.01f || 0.01f < manual.yaw) && manual.throttle > 0.3f) {
+								att_sp.yaw_body = att_sp.yaw_body + manual.yaw * 0.0025f;
+								} else if (manual.throttle <= 0.3f) {
+								att_sp.yaw_body = att.yaw;
+								}
+								//att_sp.yaw_body = 0.0f;
+								//printf("[multirotor_pos_control] vicon_pos.yaw: %8.4f\n", (double)(vicon_pos.yaw));
+
+								/* Z REGLER, PD mit Feedforward */
+								float z_vel_setpoint = 0.0f;
+								float z_pos_err_earth = (local_pos_est.z - z_pos_setpoint);
+								float z_vel_err_earth = (local_pos_est.vz - z_vel_setpoint);
+								float z_ctrl_thrust_err = z_pos_err_earth*z_ctrl_gain_p + z_vel_err_earth*z_ctrl_gain_d;
+								float z_ctrl_thrust_feedforward = 0.65f;
+								float z_ctrl_thrust = z_ctrl_thrust_feedforward + z_ctrl_thrust_err;
+								/* the throttle stick on the rc control limits the maximum thrust */
+								float thrust_limit_upper = manual.throttle;
+								if (z_ctrl_thrust >= thrust_limit_upper){
+									z_ctrl_thrust = thrust_limit_upper;
+									/*never go too low with the thrust, quadrotor may become uncontrollable */
+								}else if(z_ctrl_thrust < thrust_limit_lower){
+									z_ctrl_thrust = thrust_limit_lower;
+								}
+								//printf("[multirotor_att_control_main] height_ctrl_thrust: %8.4f\n", (double)(height_ctrl_thrust));
+								att_sp.thrust = z_ctrl_thrust;
+								att_sp.timestamp = hrt_absolute_time();
+
+								/* publish new attitude setpoint */
+								orb_publish(ORB_ID(vehicle_attitude_setpoint), att_sp_pub, &att_sp);
+
+								/* measure in what intervals the controller runs */
+								perf_count(interval_perf);
+							//} /* end state.flag_useGPS check*/
+						} else {
+							//manual control
+						}
+					} /* end of poll call for vicon updates */
+				} /* end of poll return value check */
 	}
 
 	printf("[multirotor pos control] ending now...\n");

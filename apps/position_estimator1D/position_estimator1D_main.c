@@ -200,7 +200,7 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 
 	int baro_loop_cnt = 0;
 	int baro_loop_end = 70; /* measurement for 1 second */
-	float p0 = 0.0f; /* to determin while start up */
+	float p0_Pa = 0.0f; /* to determin while start up */
 	float rho0 = 1.293f;
 
 	static float acc_x_body = 0.0f;
@@ -225,61 +225,66 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 	/* Initialize filter */
 	kalman_dlqe2_initialize();
 
+	/* declare and safely initialize all structs */
 	struct sensor_combined_s sensor;
+	memset(&sensor, 0, sizeof(sensor));
 	struct vehicle_attitude_s att;
+	memset(&att, 0, sizeof(att));
 	struct vehicle_status_s vehicle_status;
+	memset(&vehicle_status, 0, sizeof(vehicle_status)); /* make sure that baroINITdone = false */
 	struct vehicle_vicon_position_s vicon_pos;
+	memset(&vicon_pos, 0, sizeof(vicon_pos));
 	struct actuator_controls_effective_s act_eff;
+	memset(&act_eff, 0, sizeof(act_eff));
 	struct vehicle_gps_position_s gps;
-	gps.fix_type = 0;
+	memset(&gps, 0, sizeof(gps));
+	struct vehicle_local_position_s local_pos_est;
+	memset(&local_pos_est, 0, sizeof(local_pos_est));
 
+	/* subscribe */
 	int sensor_sub = orb_subscribe(ORB_ID(sensor_combined));
 	int sub_params = orb_subscribe(ORB_ID(parameter_update));
 	int vehicle_attitude_sub = orb_subscribe(ORB_ID(vehicle_attitude));
 	int actuator_sub_fd = orb_subscribe(ORB_ID(actuator_outputs_0));
-	int vehicle_status_sub = orb_subscribe(ORB_ID(vehicle_status));
 	int vicon_pos_sub = orb_subscribe(ORB_ID(vehicle_vicon_position));
 	int actuator_eff_sub = orb_subscribe(ORB_ID(actuator_controls_effective_0));
 	int vehicle_gps_sub = orb_subscribe(ORB_ID(vehicle_gps_position));
 
+	/* subscribe now */ //but not sure if have to advertise ???
+	int vehicle_status_sub = orb_subscribe(ORB_ID(vehicle_status));
+
+	/* advertise */
+	orb_advert_t local_pos_est_pub = orb_advertise(ORB_ID(vehicle_local_position), &local_pos_est);
+	//orb_advert_t vehicle_status_sub  = orb_advertise(ORB_ID(vehicle_status), &vehicle_status);
+
 	struct position_estimator1D_params pos1D_params;
 	struct position_estimator1D_param_handles pos1D_param_handles;
-
 	/* initialize parameter handles */
 	parameters_init(&pos1D_param_handles);
-	parameters_update(&pos1D_param_handles, &pos1D_params);
 
-	//struct debug_key_value_s dbg1 = { .key = "dbg:x_pos_err", .value = 0.0f };
-	//struct debug_key_value_s dbg2 = { .key = "dbg:y_pos_err", .value = 0.0f };
-	//orb_advert_t pub_dbg1 = orb_advertise(ORB_ID(debug_key_value), &dbg1);
-	//orb_advert_t pub_dbg2 = orb_advertise(ORB_ID(debug_key_value), &dbg2);
-
-	/* one could wait for multiple topics with this technique, just using one here */
-	struct pollfd fds[2] = {
-		{ .fd = vehicle_attitude_sub,   .events = POLLIN },
-		{ .fd = sub_params,   .events = POLLIN },
-		/* there could be more file descriptors here, in the form like:
-		 * { .fd = other_sub_fd,   .events = POLLIN },
-		 */
-	};
-
-	uint64_t last_time = 0;
-
-	/* first check the useGPS flag setting */
+	bool local_flag_useGPS = false;
+	/* in any case disable baroINITdone */
+	bool local_flag_useBARO = false;
+	bool local_flag_baroINITdone = false;
+	/* FIRST PARAMETER READ at START UP*/
+	/* read from param to clear updated flag */
 	struct parameter_update_s update;
 	orb_copy(ORB_ID(parameter_update), sub_params, &update);
 	/* update parameters */
 	parameters_update(&pos1D_param_handles, &pos1D_params);
-	float useGPStemp = pos1D_params.useGPS;
-	if(useGPStemp == 0.0f){
-		vehicle_status.flag_useGPS = false;
-	}else if(useGPStemp == 1.0f){
-		vehicle_status.flag_useGPS = true;
-	}
-	orb_publish(ORB_ID(vehicle_status), vehicle_status_sub, &vehicle_status);
+	local_flag_useBARO = ((pos1D_params.useBARO >= 0.9f) && (pos1D_params.useBARO <= 1.1f));
+	local_flag_useGPS = ((pos1D_params.useGPS >= 0.9f) && (pos1D_params.useGPS <= 1.1f));
+	/* END FIRST PARAMETER READ */
+
+	//vehicle_status.flag_baroINITdone = false;
+	/* and publish the state */
+	//advertising missing
+	//orb_publish(ORB_ID(vehicle_status), vehicle_status_sub, &vehicle_status);
+	//orb_copy(ORB_ID(vehicle_status), vehicle_status_sub, &vehicle_status);
+	//printf("[position_estimator1D] bool vehicle_status.baroINITdone @ startup: %s\n", (vehicle_status.flag_baroINITdone)? "true" : "false");
 
 	if(vehicle_status.flag_useGPS){
-		mavlink_log_info(mavlink_fd, "We are using GPS");
+		mavlink_log_info(mavlink_fd, "[pos_est1D] I'm using GPS");
 		/* wait until gps signal turns valid, only then can we initialize the projection */
 		while (gps.fix_type < 3) {
 			struct pollfd fds[2] = {
@@ -317,7 +322,7 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 			static int printcounter = 0;
 			if (printcounter == 100) {
 				printcounter = 0;
-				printf("wait for GPS fix type 3\n");
+				printf("[pos_est1D] wait for GPS fix type 3\n");
 			}
 			printcounter++;
 		}
@@ -332,29 +337,24 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 			/* initialize coordinates */
 			map_projection_init(lat_current, lon_current);
 			/* publish global position messages only after first GPS message */
-			printf("[multirotor position estimator] initialized projection with: lat: %.10f,  lon:%.10f\n", lat_current, lon_current);
+			printf("[pos_est1D] initialized projection with: lat: %.10f,  lon:%.10f\n", lat_current, lon_current);
 		}
 	}else{
-		mavlink_log_info(mavlink_fd, "We are NOT using GPS - We use VICON");
+		mavlink_log_info(mavlink_fd, "[pos_est1D] I'm NOT using GPS - I use VICON");
 		/* onboard calculated position estimations */
 	}
-	struct vehicle_local_position_s local_pos_est = {
-		.x = 0,
-		.y = 0,
-		.z = 0,
-		.vx = 0,
-		.vy = 0,
-		.vz = 0
-	};
-	orb_advert_t local_pos_est_pub = orb_advertise(ORB_ID(vehicle_local_position), &local_pos_est);
+	uint64_t last_time = 0;
 	thread_running = true;
 
-	/* main_loop */
+	/**< main_loop */
 	while (!thread_should_exit) {
-		/* wait for sensor update of 1 file descriptor for 1000 ms (1 second) */
-		int ret = poll(fds, 2, 500);  //wait maximal this time
+		struct pollfd fds[2] = {
+			{ .fd = vehicle_attitude_sub,   .events = POLLIN },
+			{ .fd = sub_params,   .events = POLLIN },
+		};
+		int ret = poll(fds, 2, 1000);  //wait maximal this time
 		if (ret < 0) {
-
+			/* poll error */
 		} else if (ret == 0) {
 			/* no return value, ignore */
 		} else {
@@ -364,43 +364,46 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 				orb_copy(ORB_ID(parameter_update), sub_params, &update);
 				/* update parameters */
 				parameters_update(&pos1D_param_handles, &pos1D_params);
-				float useGPStemp = pos1D_params.useGPS;
-				if(useGPStemp == 0.0f){
-					vehicle_status.flag_useGPS = false;
-				}else if(useGPStemp == 1.0f){
-					vehicle_status.flag_useGPS = true;
-				}
-				orb_publish(ORB_ID(vehicle_status), vehicle_status_sub, &vehicle_status);
-				velDecay = pos1D_params.velDecay;
-				flyingT = pos1D_params.flyingT;
-				accThres = pos1D_params.accThres;
-				//printf("[position_estimator1D] updated parameter: %8.4f\n", accThres);
+				local_flag_useBARO = ((pos1D_params.useBARO >= 0.9f) && (pos1D_params.useBARO <= 1.1f));
+				local_flag_useGPS = ((pos1D_params.useGPS >= 0.9f) && (pos1D_params.useGPS <= 1.1f));
+				printf("[pos_est1D] bool local_useBARO in update: %s\n", (local_flag_useBARO)? "true" : "false");
+				printf("[pos_est1D] bool local_useGPS in update: %s\n", (local_flag_useGPS)? "true" : "false");
+				//orb_publish(ORB_ID(vehicle_status), vehicle_status_sub, &vehicle_status);
+				//printf("[position_estimator1D] updated parameter: %8.4f\n", accThres);*/
 			}
 			if (fds[0].revents & POLLIN) {
 				/* copy actuator raw data into local buffer */
 				orb_copy(ORB_ID(actuator_controls_effective_0), actuator_eff_sub, &act_eff);
 				orb_copy(ORB_ID(vehicle_attitude), vehicle_attitude_sub, &att);
 				orb_copy(ORB_ID(vehicle_status), vehicle_status_sub, &vehicle_status);
+				orb_copy(ORB_ID(sensor_combined), sensor_sub, &sensor);
 				if(vehicle_status.flag_useGPS){
-					/* get a local copy of gps position */
 					orb_copy(ORB_ID(vehicle_gps_position), vehicle_gps_sub, &gps);
 				}else{
-					/* get a local copy of local vicon position */
 					orb_copy(ORB_ID(vehicle_vicon_position), vicon_pos_sub, &vicon_pos);
 				}
-				orb_copy(ORB_ID(sensor_combined), sensor_sub, &sensor);
 
 				// barometric pressure estimation at start up
-				if (!vehicle_status.flag_baroINIT){
+				if (!local_flag_baroINITdone){
 					// mean calculation over several measurements
 					if(baro_loop_cnt<baro_loop_end) {
-						p0 += (float)(sensor.baro_pres_mbar);
+						p0_Pa += (sensor.baro_pres_mbar*100);
 						baro_loop_cnt++;
 					}else{
-						p0 /= baro_loop_cnt;
-						vehicle_status.flag_baroINIT = true;
-						orb_publish(ORB_ID(vehicle_status), vehicle_status_sub, &vehicle_status);
-						mavlink_log_info(mavlink_fd, "barometer initialized");
+						p0_Pa /= (float)(baro_loop_cnt);
+						local_flag_baroINITdone = true;
+						//vehicle_status.flag_baroINITdone = true;
+						//orb_publish(ORB_ID(vehicle_status), vehicle_status_sub, &vehicle_status);
+						//printf("[pos_est1D] bool vehicle_status.baroINITdone in if: %s\n", (vehicle_status.flag_baroINITdone)? "true" : "false");
+						char *baro_m_start = "barometer initialized with p0 = ";
+						char p0_char[15];
+						sprintf(p0_char, "%8.2f", p0_Pa/100);
+						char *baro_m_end = " mbar";
+						char str[80];
+						strcpy(str,baro_m_start);
+						strcat(str,p0_char);
+						strcat(str,baro_m_end);
+						mavlink_log_info(mavlink_fd, str);
 					}
 				}
 				if(vehicle_status.flag_useGPS){
@@ -421,9 +424,11 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 					kalman_dlqe2(dT_const,K[0],K[1],K[2],x_y_aposteriori_k,vicon_pos.y,x_y_aposteriori);
 					memcpy(x_y_aposteriori_k, x_y_aposteriori, sizeof(x_y_aposteriori));
 					float z_est = 0.0f;
-					if(vehicle_status.flag_baroINIT && vehicle_status.flag_useBARO){
-						z_est = -p0*log(p0/sensor.baro_pres_mbar)/(rho0*const_earth_gravity);
+					if(local_flag_baroINITdone && local_flag_useBARO){
+						//printf("use BARO\n");
+						z_est = -p0_Pa*log(p0_Pa/(sensor.baro_pres_mbar*100))/(rho0*const_earth_gravity);
 					}else{
+						//printf("NOT use BARO\n");
 						z_est = vicon_pos.z;
 					}
 					kalman_dlqe2(dT_const,K[0],K[1],K[2],x_z_aposteriori_k,z_est,x_z_aposteriori);
@@ -442,8 +447,8 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 		} /* end of poll return value check */
 	}
 
-	printf("[position_estimator1D] exiting.\n");
-	mavlink_log_info(mavlink_fd, "[position_estimator1D] exiting");
+	printf("[pos_est1D] exiting.\n");
+	mavlink_log_info(mavlink_fd, "[pos_est1D] exiting");
 	thread_running = false;
 	return 0;
 }

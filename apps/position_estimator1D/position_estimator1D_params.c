@@ -54,6 +54,7 @@ PARAM_DEFINE_FLOAT(POS_EST_SIGMA, 1.0f);
 PARAM_DEFINE_FLOAT(POS_EST_R, 1.0f);
 
 PARAM_DEFINE_FLOAT(POS_EST_useGPS, 0.0f);
+PARAM_DEFINE_FLOAT(POS_EST_useBARO, 0.0f);
 PARAM_DEFINE_FLOAT(POS_EST_accThres, 0.1f);
 PARAM_DEFINE_FLOAT(POS_EST_flyingT, 230.0f);
 PARAM_DEFINE_FLOAT(POS_EST_velDecay, 0.995f);
@@ -67,6 +68,7 @@ int parameters_init(struct position_estimator1D_param_handles *h)
 	h->sigma 	=	param_find("POS_EST_SIGMA");
 	h->r 	=	param_find("POS_EST_R");
 	h->useGPS_param_handle = param_find("POS_EST_useGPS");
+	h->useBARO_param_handle = param_find("POS_EST_useBARO");
 	h->accThreshold_param_handle = param_find("POS_EST_accThres");
 	h->flyingThreshold_param_handle = param_find("POS_EST_flyingT");
 	h->velDecay_param_handle = param_find("POS_EST_velDecay");
@@ -81,6 +83,7 @@ int parameters_update(const struct position_estimator1D_param_handles *h, struct
 	param_get(h->sigma, &(p->sigma));
 	param_get(h->r, &(p->R));
 	param_get(h->useGPS_param_handle, &(p->useGPS));
+	param_get(h->useBARO_param_handle, &(p->useBARO));
 	param_get(h->accThreshold_param_handle, &(p->accThres));
 	param_get(h->flyingThreshold_param_handle, &(p->flyingT));
 	param_get(h->velDecay_param_handle, &(p->velDecay));
