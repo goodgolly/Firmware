@@ -306,10 +306,9 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 					orb_copy(ORB_ID(parameter_update), sub_params, &update);
 					/* update parameters */
 					parameters_update(&pos1D_param_handles, &pos1D_params);
-					float useGPStemp = pos1D_params.useGPS;
-					if(useGPStemp == 0.0f){
-						vehicle_status.flag_useGPS = false;
-						orb_publish(ORB_ID(vehicle_status), vehicle_status_sub, &vehicle_status);
+					if(!((pos1D_params.useGPS >= 0.9f) && (pos1D_params.useGPS <= 1.1f))){
+						local_flag_useGPS = false;
+						mavlink_log_info(mavlink_fd, "[pos_est1D] Revert GPS - Goingt to VICON");
 						break; /* leave gps fix type 3 while loop */
 					}
 				}
@@ -371,7 +370,7 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 				orb_copy(ORB_ID(vehicle_attitude), vehicle_attitude_sub, &att);
 				orb_copy(ORB_ID(vehicle_status), vehicle_status_sub, &vehicle_status);
 				orb_copy(ORB_ID(sensor_combined), sensor_sub, &sensor);
-				if(vehicle_status.flag_useGPS){
+				if(local_flag_useGPS){
 					orb_copy(ORB_ID(vehicle_gps_position), vehicle_gps_sub, &gps);
 				}else{
 					orb_copy(ORB_ID(vehicle_vicon_position), vicon_pos_sub, &vicon_pos);
@@ -406,9 +405,20 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 						/* Project gps lat lon (Geographic coordinate system) to plane*/
 						map_projection_project(((double)(gps.lat)) * 1e-7, ((double)(gps.lon)) * 1e-7, &(z[0]), &(z[1]));
 						local_pos_est.x = z[0];
+						local_pos_est.vx = 0.0f;
 						local_pos_est.y = z[1];
+						local_pos_est.vy = 0.0f;
 						/* negative offset from initialization altitude */
-						local_pos_est.z = alt_current - (gps.alt) * 1e-3;
+						float z_est = 0.0f;
+						if(local_flag_baroINITdone && local_flag_useBARO){
+							//printf("use BARO\n");
+							z_est = -p0_Pa*log(p0_Pa/(sensor.baro_pres_mbar*100))/(rho0*const_earth_gravity);
+						}else{
+							//printf("NOT use BARO\n");
+							z_est = alt_current - (gps.alt) * 1e-3;
+						}
+						local_pos_est.z = z_est;
+						local_pos_est.vz = 0.0f;
 						orb_publish(ORB_ID(vehicle_local_position), local_pos_est_pub, &local_pos_est);
 					}
 				}else{

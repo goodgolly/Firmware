@@ -258,90 +258,85 @@ multirotor_pos_control_thread_main(int argc, char *argv[])
 						printcounter++;*/
 
 						if (vehicle_status.state_machine == SYSTEM_STATE_AUTO) {
-							//if(state.flag_useGPS){
-								/* all GPS control here */
-							//}else{
-								/* all VICON control here */
-								/* ROLL & PITCH REGLER */
-								float y_pos_setpoint = 0.0f;
-								float x_pos_setpoint = 0.0f;
-								float y_pos_err_earth = -(local_pos_est.y - y_pos_setpoint);
-								float x_pos_err_earth = (local_pos_est.x - x_pos_setpoint);
-								float y_vel_setpoint = 0.0f;
-								float x_vel_setpoint = 0.0f;
-								float y_vel_err_earth = -(local_pos_est.vy - y_vel_setpoint);
-								float x_vel_err_earth = (local_pos_est.vx - x_vel_setpoint);
-								/* rotMatrix is from body to earth*/
-								rotMatrix[0] = cos(vicon_pos.yaw);
-								rotMatrix[1] = -sin(vicon_pos.yaw);
-								rotMatrix[2] = sin(vicon_pos.yaw);
-								rotMatrix[3] = cos(vicon_pos.yaw);
-								/* PD regler im earth frame, different sign because of Transformation from earth to body frame */
-								float rollpos = (rotMatrix[0]*y_pos_err_earth-rotMatrix[1]*x_pos_err_earth)*pos_ctrl_gain_p;
-								float rollvel = (rotMatrix[0]*y_vel_err_earth-rotMatrix[1]*x_vel_err_earth)*pos_ctrl_gain_d;
-								float pitchpos = (-rotMatrix[2]*y_pos_err_earth+rotMatrix[3]*x_pos_err_earth)*pos_ctrl_gain_p;
-								float pitchvel = (-rotMatrix[2]*y_vel_err_earth+rotMatrix[3]*x_vel_err_earth)*pos_ctrl_gain_d;
-								float rolltot = rollpos + rollvel;
-								float pitchtot = pitchpos + pitchvel;
+							/* ROLL & PITCH REGLER */
+							float y_pos_setpoint = 0.0f;
+							float x_pos_setpoint = 0.0f;
+							float y_pos_err_earth = -(local_pos_est.y - y_pos_setpoint);
+							float x_pos_err_earth = (local_pos_est.x - x_pos_setpoint);
+							float y_vel_setpoint = 0.0f;
+							float x_vel_setpoint = 0.0f;
+							float y_vel_err_earth = -(local_pos_est.vy - y_vel_setpoint);
+							float x_vel_err_earth = (local_pos_est.vx - x_vel_setpoint);
+							/* rotMatrix is from body to earth*/
+							rotMatrix[0] = cos(vicon_pos.yaw);
+							rotMatrix[1] = -sin(vicon_pos.yaw);
+							rotMatrix[2] = sin(vicon_pos.yaw);
+							rotMatrix[3] = cos(vicon_pos.yaw);
+							/* PD regler im earth frame, different sign because of Transformation from earth to body frame */
+							float rollpos = (rotMatrix[0]*y_pos_err_earth-rotMatrix[1]*x_pos_err_earth)*pos_ctrl_gain_p;
+							float rollvel = (rotMatrix[0]*y_vel_err_earth-rotMatrix[1]*x_vel_err_earth)*pos_ctrl_gain_d;
+							float pitchpos = (-rotMatrix[2]*y_pos_err_earth+rotMatrix[3]*x_pos_err_earth)*pos_ctrl_gain_p;
+							float pitchvel = (-rotMatrix[2]*y_vel_err_earth+rotMatrix[3]*x_vel_err_earth)*pos_ctrl_gain_d;
+							float rolltot = rollpos + rollvel;
+							float pitchtot = pitchpos + pitchvel;
 
-								/* limit setpoints to maximal the values of the manual flight*/
-								if((rolltot <= roll_limit) && (rolltot >= -roll_limit)){
-									att_sp.roll_body = rolltot;
-								}else{
-									if(rolltot > roll_limit){
-										att_sp.roll_body = roll_limit;
-									}
-									if(rolltot < -roll_limit){
-										att_sp.roll_body = -roll_limit;
-									}
+							/* limit setpoints to maximal the values of the manual flight*/
+							if((rolltot <= roll_limit) && (rolltot >= -roll_limit)){
+								att_sp.roll_body = rolltot;
+							}else{
+								if(rolltot > roll_limit){
+									att_sp.roll_body = roll_limit;
 								}
-								if((pitchtot <= pitch_limit) && (pitchtot >= -pitch_limit)){
-									att_sp.pitch_body = pitchtot;
-								}else{
-									if(pitchtot > pitch_limit){
-										att_sp.pitch_body = pitch_limit;
-									}
-									if(pitchtot < -pitch_limit){
-										att_sp.pitch_body = -pitch_limit;
-									}
+								if(rolltot < -roll_limit){
+									att_sp.roll_body = -roll_limit;
 								}
-								/* checked that limitation works correctly */
-								//printf("[multirotor_att_control_main] att_sp.roll_body: %8.4f\n", (double)(att_sp.roll_body));
-
-								/* YAW REGLER */
-								if ((manual.yaw < -0.01f || 0.01f < manual.yaw) && manual.throttle > 0.3f) {
-								att_sp.yaw_body = att_sp.yaw_body + manual.yaw * 0.0025f;
-								} else if (manual.throttle <= 0.3f) {
-								att_sp.yaw_body = att.yaw;
+							}
+							if((pitchtot <= pitch_limit) && (pitchtot >= -pitch_limit)){
+								att_sp.pitch_body = pitchtot;
+							}else{
+								if(pitchtot > pitch_limit){
+									att_sp.pitch_body = pitch_limit;
 								}
-								//att_sp.yaw_body = 0.0f;
-								//printf("[multirotor_pos_control] vicon_pos.yaw: %8.4f\n", (double)(vicon_pos.yaw));
-
-								/* Z REGLER, PD mit Feedforward */
-								float z_vel_setpoint = 0.0f;
-								float z_pos_err_earth = (local_pos_est.z - z_pos_setpoint);
-								float z_vel_err_earth = (local_pos_est.vz - z_vel_setpoint);
-								float z_ctrl_thrust_err = z_pos_err_earth*z_ctrl_gain_p + z_vel_err_earth*z_ctrl_gain_d;
-								float z_ctrl_thrust_feedforward = 0.65f;
-								float z_ctrl_thrust = z_ctrl_thrust_feedforward + z_ctrl_thrust_err;
-								/* the throttle stick on the rc control limits the maximum thrust */
-								float thrust_limit_upper = manual.throttle;
-								if (z_ctrl_thrust >= thrust_limit_upper){
-									z_ctrl_thrust = thrust_limit_upper;
-									/*never go too low with the thrust, quadrotor may become uncontrollable */
-								}else if(z_ctrl_thrust < thrust_limit_lower){
-									z_ctrl_thrust = thrust_limit_lower;
+								if(pitchtot < -pitch_limit){
+									att_sp.pitch_body = -pitch_limit;
 								}
-								//printf("[multirotor_att_control_main] height_ctrl_thrust: %8.4f\n", (double)(height_ctrl_thrust));
-								att_sp.thrust = z_ctrl_thrust;
-								att_sp.timestamp = hrt_absolute_time();
+							}
+							/* checked that limitation works correctly */
+							//printf("[multirotor_att_control_main] att_sp.roll_body: %8.4f\n", (double)(att_sp.roll_body));
 
-								/* publish new attitude setpoint */
-								orb_publish(ORB_ID(vehicle_attitude_setpoint), att_sp_pub, &att_sp);
+							/* YAW REGLER */
+							if ((manual.yaw < -0.01f || 0.01f < manual.yaw) && manual.throttle > 0.3f) {
+							att_sp.yaw_body = att_sp.yaw_body + manual.yaw * 0.0025f;
+							} else if (manual.throttle <= 0.3f) {
+							att_sp.yaw_body = att.yaw;
+							}
+							//att_sp.yaw_body = 0.0f;
+							//printf("[multirotor_pos_control] vicon_pos.yaw: %8.4f\n", (double)(vicon_pos.yaw));
 
-								/* measure in what intervals the controller runs */
-								perf_count(interval_perf);
-							//} /* end state.flag_useGPS check*/
+							/* Z REGLER, PD mit Feedforward */
+							float z_vel_setpoint = 0.0f;
+							float z_pos_err_earth = (local_pos_est.z - z_pos_setpoint);
+							float z_vel_err_earth = (local_pos_est.vz - z_vel_setpoint);
+							float z_ctrl_thrust_err = z_pos_err_earth*z_ctrl_gain_p + z_vel_err_earth*z_ctrl_gain_d;
+							float z_ctrl_thrust_feedforward = 0.65f;
+							float z_ctrl_thrust = z_ctrl_thrust_feedforward + z_ctrl_thrust_err;
+							/* the throttle stick on the rc control limits the maximum thrust */
+							float thrust_limit_upper = manual.throttle;
+							if (z_ctrl_thrust >= thrust_limit_upper){
+								z_ctrl_thrust = thrust_limit_upper;
+								/*never go too low with the thrust, quadrotor may become uncontrollable */
+							}else if(z_ctrl_thrust < thrust_limit_lower){
+								z_ctrl_thrust = thrust_limit_lower;
+							}
+							//printf("[multirotor_att_control_main] height_ctrl_thrust: %8.4f\n", (double)(height_ctrl_thrust));
+							att_sp.thrust = z_ctrl_thrust;
+							att_sp.timestamp = hrt_absolute_time();
+
+							/* publish new attitude setpoint */
+							orb_publish(ORB_ID(vehicle_attitude_setpoint), att_sp_pub, &att_sp);
+
+							/* measure in what intervals the controller runs */
+							perf_count(interval_perf);
 						} else {
 							//manual control
 						}
