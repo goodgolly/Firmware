@@ -194,6 +194,7 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 	//static float P_y_aposteriori[9] = {0.0f ,0.0f, 0.0f, 0.0f ,0.0f, 0.0f, 0.0f ,0.0f, 0.0f};
 
 	const static float dT_const = 1.0f/120.0f;
+	static float posUdateFreq = 0.0f;
 
 	//computed from dlqe in matlab
 	const static float K[3] = {0.2151f, 2.9154f, 19.7599f};
@@ -274,16 +275,10 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 	parameters_update(&pos1D_param_handles, &pos1D_params);
 	local_flag_useBARO = ((pos1D_params.useBARO >= 0.9f) && (pos1D_params.useBARO <= 1.1f));
 	local_flag_useGPS = ((pos1D_params.useGPS >= 0.9f) && (pos1D_params.useGPS <= 1.1f));
+	posUdateFreq = pos1D_params.updateFreq;
 	/* END FIRST PARAMETER READ */
 
-	//vehicle_status.flag_baroINITdone = false;
-	/* and publish the state */
-	//advertising missing
-	//orb_publish(ORB_ID(vehicle_status), vehicle_status_sub, &vehicle_status);
-	//orb_copy(ORB_ID(vehicle_status), vehicle_status_sub, &vehicle_status);
-	//printf("[position_estimator1D] bool vehicle_status.baroINITdone @ startup: %s\n", (vehicle_status.flag_baroINITdone)? "true" : "false");
-
-	if(vehicle_status.flag_useGPS){
+	if(local_flag_useGPS){
 		mavlink_log_info(mavlink_fd, "[pos_est1D] I'm using GPS");
 		/* wait until gps signal turns valid, only then can we initialize the projection */
 		while (gps.fix_type < 3) {
@@ -328,7 +323,7 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 		}
 
 		/* check again if useGPS was not aborted and only if not set up tangent plane map initialization*/
-		if(vehicle_status.flag_useGPS){
+		if(local_flag_useGPS){
 			/* get gps value for first initialization */
 			orb_copy(ORB_ID(vehicle_gps_position), vehicle_gps_sub, &gps);
 			lat_current = ((double)(gps.lat)) * 1e-7;
@@ -366,10 +361,9 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 				parameters_update(&pos1D_param_handles, &pos1D_params);
 				local_flag_useBARO = ((pos1D_params.useBARO >= 0.9f) && (pos1D_params.useBARO <= 1.1f));
 				local_flag_useGPS = ((pos1D_params.useGPS >= 0.9f) && (pos1D_params.useGPS <= 1.1f));
+				posUdateFreq = pos1D_params.updateFreq;
 				printf("[pos_est1D] bool local_useBARO in update: %s\n", (local_flag_useBARO)? "true" : "false");
 				printf("[pos_est1D] bool local_useGPS in update: %s\n", (local_flag_useGPS)? "true" : "false");
-				//orb_publish(ORB_ID(vehicle_status), vehicle_status_sub, &vehicle_status);
-				//printf("[position_estimator1D] updated parameter: %8.4f\n", accThres);*/
 			}
 			if (fds[0].revents & POLLIN) {
 				/* copy actuator raw data into local buffer */
@@ -382,6 +376,9 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 				}else{
 					orb_copy(ORB_ID(vehicle_vicon_position), vicon_pos_sub, &vicon_pos);
 				}
+				//float dT = (hrt_absolute_time() - last_time) / 1000000.0f;
+				//last_time = hrt_absolute_time();
+				//printf("[multirotor_att_control_main] dT: %8.8f\n", (double)(dT));
 
 				// barometric pressure estimation at start up
 				if (!local_flag_baroINITdone){
@@ -392,9 +389,6 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 					}else{
 						p0_Pa /= (float)(baro_loop_cnt);
 						local_flag_baroINITdone = true;
-						//vehicle_status.flag_baroINITdone = true;
-						//orb_publish(ORB_ID(vehicle_status), vehicle_status_sub, &vehicle_status);
-						//printf("[pos_est1D] bool vehicle_status.baroINITdone in if: %s\n", (vehicle_status.flag_baroINITdone)? "true" : "false");
 						char *baro_m_start = "barometer initialized with p0 = ";
 						char p0_char[15];
 						sprintf(p0_char, "%8.2f", p0_Pa/100);
@@ -406,7 +400,7 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 						mavlink_log_info(mavlink_fd, str);
 					}
 				}
-				if(vehicle_status.flag_useGPS){
+				if(local_flag_useGPS){
 					/* initialize map projection with the last estimate (not at full rate) */
 					if (gps.fix_type > 2) {
 						/* Project gps lat lon (Geographic coordinate system) to plane*/

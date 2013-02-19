@@ -52,7 +52,6 @@ PARAM_DEFINE_FLOAT(POS_EST_Q33, 0.0f);
 /* gps measurement noise standard deviation */
 PARAM_DEFINE_FLOAT(POS_EST_SIGMA, 1.0f);
 PARAM_DEFINE_FLOAT(POS_EST_R, 1.0f);
-
 PARAM_DEFINE_FLOAT(POS_EST_useGPS, 0.0f);
 PARAM_DEFINE_FLOAT(POS_EST_useBARO, 0.0f);
 PARAM_DEFINE_FLOAT(POS_EST_accThres, 0.1f);
@@ -69,6 +68,7 @@ int parameters_init(struct position_estimator1D_param_handles *h)
 	h->r 	=	param_find("POS_EST_R");
 	h->useGPS_param_handle = param_find("POS_EST_useGPS");
 	h->useBARO_param_handle = param_find("POS_EST_useBARO");
+	h->updateFreq_param_handle = param_find("POS_EST_updateFreq");
 	h->accThreshold_param_handle = param_find("POS_EST_accThres");
 	h->flyingThreshold_param_handle = param_find("POS_EST_flyingT");
 	h->velDecay_param_handle = param_find("POS_EST_velDecay");
@@ -84,6 +84,7 @@ int parameters_update(const struct position_estimator1D_param_handles *h, struct
 	param_get(h->r, &(p->R));
 	param_get(h->useGPS_param_handle, &(p->useGPS));
 	param_get(h->useBARO_param_handle, &(p->useBARO));
+	param_get(h->updateFreq_param_handle, &(p->updateFreq));
 	param_get(h->accThreshold_param_handle, &(p->accThres));
 	param_get(h->flyingThreshold_param_handle, &(p->flyingT));
 	param_get(h->velDecay_param_handle, &(p->velDecay));
