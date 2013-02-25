@@ -146,15 +146,6 @@
 #  error "CONFIG_USBDEV_EP3_TXFIFO_SIZE is out of range"
 #endif
 
-/* REVISIT! This forces a hack that polls DTXFSTS for space in the Tx FIFO.
- * Enabling this option is a BAD thing.  It will cause inline waits inside 
- * of the USB interrupt handler.  The correct way to handle this is to
- * enable the correct TxFIFO interrupt and wait until the Tx FIFO is empty.
- * Unfortunately, the interrupt driven logic is not working... Please fix!
- */
-
-#define ENABLE_DTXFSTS_POLLHACK 1
-
 /* Debug ***********************************************************************/
 /* Trace error codes */
 
@@ -184,8 +175,9 @@
 #define STM32_TRACEERR_NOEP                 0x18
 #define STM32_TRACEERR_NOTCONFIGURED        0x19
 #define STM32_TRACEERR_EPOUTQEMPTY          0x1a
-#define STM32_TRACEERR_EPINQEMPTY           0x1b
+#define STM32_TRACEERR_EPINREQEMPTY         0x1b
 #define STM32_TRACEERR_NOOUTSETUP           0x1c
+#define STM32_TRACEERR_POLLTIMEOUT          0x1d
 
 /* Trace interrupt codes */
 
@@ -405,7 +397,6 @@ struct stm32_ep_s
   struct stm32_req_s    *tail;
   uint8_t                epphy;        /* Physical EP address */
   uint8_t                eptype:2;     /* Endpoint type */
-  uint8_t                configured:1; /* 1: Endpoint has been configured */
   uint8_t                active:1;     /* 1: A request is being processed */
   uint8_t                stalled:1;    /* 1: Endpoint is stalled */
   uint8_t                isin:1;       /* 1: IN Endpoint */
@@ -432,7 +423,6 @@ struct stm32_usbdev_s
 
   uint8_t                 stalled:1;     /* 1: Protocol stalled */
   uint8_t                 selfpowered:1; /* 1: Device is self powered */
-  uint8_t                 connected:1;   /* 1: Host connected */
   uint8_t                 addressed:1;   /* 1: Peripheral address has been set */
   uint8_t                 configured:1;  /* 1: Class driver has been configured */
   uint8_t                 wakeup:1;      /* 1: Device remote wake-up */
@@ -508,7 +498,7 @@ static void        stm32_ep0out_ctrlsetup(FAR struct stm32_usbdev_s *priv);
 static void        stm32_txfifo_write(FAR struct stm32_ep_s *privep,
                      FAR uint8_t *buf, int nbytes);
 static void        stm32_epin_transfer(FAR struct stm32_ep_s *privep,
-                                       FAR uint8_t *buf, int nbytes);
+                     FAR uint8_t *buf, int nbytes);
 static void        stm32_epin_request(FAR struct stm32_usbdev_s *priv,
                      FAR struct stm32_ep_s *privep);
 
@@ -687,6 +677,99 @@ static const struct usbdev_ops_s g_devops =
   .selfpowered = stm32_selfpowered,
   .pullup      = stm32_pullup,
 };
+
+/* Device error strings that may be enabled for more desciptive USB trace
+ * output.
+ */
+
+#ifdef CONFIG_USBDEV_TRACE_STRINGS
+const struct trace_msg_t g_usb_trace_strings_deverror[] =
+{
+  TRACE_STR(STM32_TRACEERR_ALLOCFAIL       ),
+  TRACE_STR(STM32_TRACEERR_BADCLEARFEATURE ),
+  TRACE_STR(STM32_TRACEERR_BADDEVGETSTATUS ),
+  TRACE_STR(STM32_TRACEERR_BADEPNO         ),
+  TRACE_STR(STM32_TRACEERR_BADEPGETSTATUS  ),
+  TRACE_STR(STM32_TRACEERR_BADGETCONFIG    ),
+  TRACE_STR(STM32_TRACEERR_BADGETSETDESC   ),
+  TRACE_STR(STM32_TRACEERR_BADGETSTATUS    ),
+  TRACE_STR(STM32_TRACEERR_BADSETADDRESS   ),
+  TRACE_STR(STM32_TRACEERR_BADSETCONFIG    ),
+  TRACE_STR(STM32_TRACEERR_BADSETFEATURE   ),
+  TRACE_STR(STM32_TRACEERR_BADTESTMODE     ),
+  TRACE_STR(STM32_TRACEERR_BINDFAILED      ),
+  TRACE_STR(STM32_TRACEERR_DISPATCHSTALL   ),
+  TRACE_STR(STM32_TRACEERR_DRIVER          ),
+  TRACE_STR(STM32_TRACEERR_DRIVERREGISTERED),
+  TRACE_STR(STM32_TRACEERR_EP0NOSETUP      ),
+  TRACE_STR(STM32_TRACEERR_EP0SETUPSTALLED ),
+  TRACE_STR(STM32_TRACEERR_EPINNULLPACKET  ),
+  TRACE_STR(STM32_TRACEERR_EPOUTNULLPACKET ),
+  TRACE_STR(STM32_TRACEERR_INVALIDCTRLREQ  ),
+  TRACE_STR(STM32_TRACEERR_INVALIDPARMS    ),
+  TRACE_STR(STM32_TRACEERR_IRQREGISTRATION ),
+  TRACE_STR(STM32_TRACEERR_NOEP            ),
+  TRACE_STR(STM32_TRACEERR_NOTCONFIGURED   ),
+  TRACE_STR(STM32_TRACEERR_EPOUTQEMPTY     ),
+  TRACE_STR(STM32_TRACEERR_EPINREQEMPTY    ),
+  TRACE_STR(STM32_TRACEERR_NOOUTSETUP      ),
+  TRACE_STR(STM32_TRACEERR_POLLTIMEOUT     ),
+  TRACE_STR_END
+};
+#endif
+
+/* Interrupt event strings that may be enabled for more desciptive USB trace
+ * output.
+ */
+
+#ifdef CONFIG_USBDEV_TRACE_STRINGS
+const struct trace_msg_t g_usb_trace_strings_intdecode[] =
+{
+  TRACE_STR(STM32_TRACEINTID_USB         ),
+  TRACE_STR(STM32_TRACEINTID_INTPENDING  ),
+  TRACE_STR(STM32_TRACEINTID_EPOUT       ),
+  TRACE_STR(STM32_TRACEINTID_EPIN        ),
+  TRACE_STR(STM32_TRACEINTID_MISMATCH    ),
+  TRACE_STR(STM32_TRACEINTID_WAKEUP      ),
+  TRACE_STR(STM32_TRACEINTID_SUSPEND     ),
+  TRACE_STR(STM32_TRACEINTID_SOF         ),
+  TRACE_STR(STM32_TRACEINTID_RXFIFO      ),
+  TRACE_STR(STM32_TRACEINTID_DEVRESET    ),
+  TRACE_STR(STM32_TRACEINTID_ENUMDNE     ),
+  TRACE_STR(STM32_TRACEINTID_IISOIXFR    ),
+  TRACE_STR(STM32_TRACEINTID_IISOOXFR    ),
+  TRACE_STR(STM32_TRACEINTID_SRQ         ),
+  TRACE_STR(STM32_TRACEINTID_OTG         ),
+  TRACE_STR(STM32_TRACEINTID_EPOUT_XFRC  ),
+  TRACE_STR(STM32_TRACEINTID_EPOUT_EPDISD),
+  TRACE_STR(STM32_TRACEINTID_EPOUT_SETUP ),
+  TRACE_STR(STM32_TRACEINTID_DISPATCH    ),
+  TRACE_STR(STM32_TRACEINTID_GETSTATUS   ),
+  TRACE_STR(STM32_TRACEINTID_EPGETSTATUS ),
+  TRACE_STR(STM32_TRACEINTID_DEVGETSTATUS),
+  TRACE_STR(STM32_TRACEINTID_IFGETSTATUS ),
+  TRACE_STR(STM32_TRACEINTID_CLEARFEATURE),
+  TRACE_STR(STM32_TRACEINTID_SETFEATURE  ),
+  TRACE_STR(STM32_TRACEINTID_SETADDRESS  ),
+  TRACE_STR(STM32_TRACEINTID_GETSETDESC  ),
+  TRACE_STR(STM32_TRACEINTID_GETCONFIG   ),
+  TRACE_STR(STM32_TRACEINTID_SETCONFIG   ),
+  TRACE_STR(STM32_TRACEINTID_GETSETIF    ),
+  TRACE_STR(STM32_TRACEINTID_SYNCHFRAME  ),
+  TRACE_STR(STM32_TRACEINTID_EPIN_XFRC   ),
+  TRACE_STR(STM32_TRACEINTID_EPIN_TOC    ),
+  TRACE_STR(STM32_TRACEINTID_EPIN_ITTXFE ),
+  TRACE_STR(STM32_TRACEINTID_EPIN_EPDISD ),
+  TRACE_STR(STM32_TRACEINTID_EPIN_TXFE   ),
+  TRACE_STR(STM32_TRACEINTID_EPIN_EMPWAIT),
+  TRACE_STR(STM32_TRACEINTID_OUTNAK      ),
+  TRACE_STR(STM32_TRACEINTID_OUTRECVD    ),
+  TRACE_STR(STM32_TRACEINTID_OUTDONE     ),
+  TRACE_STR(STM32_TRACEINTID_SETUPDONE   ),
+  TRACE_STR(STM32_TRACEINTID_SETUPRECVD  ),
+  TRACE_STR_END
+};
+#endif
 
 /*******************************************************************************
  * Public Data
@@ -962,7 +1045,7 @@ static void stm32_txfifo_write(FAR struct stm32_ep_s *privep,
       regval |= ((uint32_t)*buf++) << 16;
       regval |= ((uint32_t)*buf++) << 24;
 
-      /* Then write the packed data to the TxFIFO */
+      /* Then write the packet data to the TxFIFO */
 
       stm32_putreg(regval, regaddr);
     }
@@ -1082,9 +1165,6 @@ static void stm32_epin_request(FAR struct stm32_usbdev_s *priv,
   struct stm32_req_s *privreq;
   uint32_t regaddr;
   uint32_t regval;
-#ifdef ENABLE_DTXFSTS_POLLHACK
-  int32_t timeout;
-#endif
   uint8_t *buf;
   int nbytes;
   int nwords;
@@ -1113,7 +1193,7 @@ static void stm32_epin_request(FAR struct stm32_usbdev_s *priv,
   privreq = stm32_rqpeek(privep);
   if (!privreq)
     {
-      usbtrace(TRACE_DEVERROR(STM32_TRACEERR_EPINQEMPTY), privep->epphy);
+      usbtrace(TRACE_DEVERROR(STM32_TRACEERR_EPINREQEMPTY), privep->epphy);
 
       /* There is no TX transfer in progress and no new pending TX
        * requests to send.  To stop transmitting any data on a particular
@@ -1151,13 +1231,20 @@ static void stm32_epin_request(FAR struct stm32_usbdev_s *priv,
        privep->zlp = true;
     }
 
-  /* Loop while there are still bytes to be transferred (or a zero-length-
-   * packet, ZLP, to be sent).  The loop will also be terminated if there
-   * is insufficient space remaining in the TxFIFO to send a complete
-   * packet.
+  /* Add one more packet to the TxFIFO.  We will wait for the transfer
+   * complete event before we add the next packet (or part of a packet
+   * to the TxFIFO).
+   *
+   * The documentation says that we can can multiple packets to the TxFIFO,
+   * but it seems that we need to get the transfer complete event before
+   * we can add the next (or maybe I have got something wrong?)
    */
 
+#if 0
   while (privreq->req.xfrd < privreq->req.len || privep->zlp)
+#else
+  if (privreq->req.xfrd < privreq->req.len || privep->zlp)
+#endif
     {
       /* Get the number of bytes left to be sent in the request */
 
@@ -1219,25 +1306,9 @@ static void stm32_epin_request(FAR struct stm32_usbdev_s *priv,
 
       regaddr = STM32_OTGFS_DTXFSTS(privep->epphy);
 
-#ifdef ENABLE_DTXFSTS_POLLHACK
-      /* If ENABLE_DTXFSTS_POLLHACK is enabled , then poll DTXFSTS until
-       * space in the TxFIFO is available.  If it doesn't become available,
-       * in a reasonable amount of time, then just pretend that it is.
-       */
-       
-      for (timeout = 250000; timeout > 0; timeout--)
-        {
-          regval  = stm32_getreg(regaddr);
-          if ((regval & OTGFS_DTXFSTS_MASK) >= nwords)
-            {
-              break;
-            }
-        }
-#else
-      /* If ENABLE_DTXFSTS_POLLHACK is not enabled, then check once for
-       * space in the TxFIFO.  If space in the TxFIFO is not available,
-       * then set up an interrupt to resume the transfer when the TxFIFO
-       * is empty.
+      /* Check for space in the TxFIFO.  If space in the TxFIFO is not
+       * available, then set up an interrupt to resume the transfer when
+       * the TxFIFO is empty.
        */
 
       regval = stm32_getreg(regaddr);
@@ -1253,11 +1324,12 @@ static void stm32_epin_request(FAR struct stm32_usbdev_s *priv,
           empmsk |= OTGFS_DIEPEMPMSK(privep->epphy);
           stm32_putreg(empmsk, STM32_OTGFS_DIEPEMPMSK);
 
-          /* Terminate the transfer loop */
+          /* Terminate the transfer.  We will try again when the TxFIFO empty
+           * interrupt is received.
+           */
 
-          break;
+          return;
         }
-#endif
 
       /* Transfer data to the TxFIFO */
 
@@ -1290,11 +1362,12 @@ static void stm32_epin_request(FAR struct stm32_usbdev_s *priv,
   if (privreq->req.xfrd >= privreq->req.len && !privep->zlp)
     {
       usbtrace(TRACE_COMPLETE(privep->epphy), privreq->req.xfrd);
+
+      /* We are finished with the request (although the transfer has not
+       * yet completed).
+       */
+
       stm32_req_complete(privep, OK);
-
-      /* The endpoint is no longer transferring data */
-
-      privep->active = false;
     }
 }
 
@@ -1813,13 +1886,6 @@ static struct stm32_ep_s *stm32_ep_findbyaddr(struct stm32_usbdev_s *priv,
   else
     {
       privep = &priv->epout[epphy];
-    }
-
-  /* Verify that the endpoint has been configured */
-
-  if (!privep->configured)
-    {
-      return NULL;
     }
 
   /* Return endpoint reference */
@@ -2478,16 +2544,16 @@ static inline void stm32_epout(FAR struct stm32_usbdev_s *priv, uint8_t epno)
           /* Continue processing data from the EP0 OUT request queue */
 
           stm32_epout_complete(priv, privep);
-        }
 
-      /* If we are not actively processing an OUT request, then we
-       * need to setup to receive the next control request.
-       */
+          /* If we are not actively processing an OUT request, then we
+           * need to setup to receive the next control request.
+           */
 
-      if (!privep->active)
-        {
-          stm32_ep0out_ctrlsetup(priv);
-          priv->ep0state = EP0STATE_IDLE;
+          if (!privep->active)
+            {
+              stm32_ep0out_ctrlsetup(priv);
+              priv->ep0state = EP0STATE_IDLE;
+            }
         }
     }
 
@@ -2645,16 +2711,16 @@ static inline void stm32_epin(FAR struct stm32_usbdev_s *priv, uint8_t epno)
           /* Continue processing data from the EP0 OUT request queue */
 
           stm32_epin_request(priv, privep);
-        }
 
-      /* If we are not actively processing an OUT request, then we
-       * need to setup to receive the next control request.
-       */
+          /* If we are not actively processing an OUT request, then we
+           * need to setup to receive the next control request.
+           */
 
-      if (!privep->active)
-        {
-          stm32_ep0out_ctrlsetup(priv);
-          priv->ep0state = EP0STATE_IDLE;
+          if (!privep->active)
+            {
+              stm32_ep0out_ctrlsetup(priv);
+              priv->ep0state = EP0STATE_IDLE;
+            }
         }
 
       /* Test mode is another special case */
@@ -2690,7 +2756,7 @@ static inline void stm32_epin_txfifoempty(FAR struct stm32_usbdev_s *priv, int e
   FAR struct stm32_ep_s *privep = &priv->epin[epno];
 
   /* Continue processing the write request queue.  This may mean sending
-   * more dat from the exisiting request or terminating the current requests
+   * more data from the exisiting request or terminating the current requests
    * and (perhaps) starting the IN transfer from the next write request.
    */
 
@@ -2741,9 +2807,11 @@ static inline void stm32_epin_interrupt(FAR struct stm32_usbdev_s *priv)
 
           mask = stm32_getreg(STM32_OTGFS_DIEPMSK);
 
-          /* Check for FIFO not empty.  Bits n corresponds to endpoint n.
-           * That condition corresponds to bit 7 of the DIEPINT interrupt
-           * status register.
+          /* Check if the TxFIFO not empty interrupt is enabled for this
+           * endpoint in the DIEPMSK register.  Bits n corresponds to
+           * endpoint n in the register. That condition corresponds to
+           * bit 7 of the DIEPINT interrupt status register.  There is
+           * no TXFE bit in the mask register, so we fake one here.
            */
 
           empty = stm32_getreg(STM32_OTGFS_DIEPEMPMSK);
@@ -2763,13 +2831,15 @@ static inline void stm32_epin_interrupt(FAR struct stm32_usbdev_s *priv)
 
           if ((diepint & OTGFS_DIEPINT_XFRC) != 0)
             {
-              usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_EPIN_XFRC), (uint16_t)diepint);
+              usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_EPIN_XFRC),
+                       (uint16_t)diepint);
 
-              /* It is possible that logic may be waiting for a the TxFIFO to become
-               * empty.  We disable the TxFIFO empty interrupt here; it will be
-               * re-enabled if there is still insufficient space in the TxFIFO.
+              /* It is possible that logic may be waiting for a the
+               * TxFIFO to become empty.  We disable the TxFIFO empty
+               * interrupt here; it will be re-enabled if there is still
+               * insufficient space in the TxFIFO.
                */
-               
+
               empty &= ~OTGFS_DIEPEMPMSK(epno);
               stm32_putreg(empty, STM32_OTGFS_DIEPEMPMSK);
               stm32_putreg(OTGFS_DIEPINT_XFRC, STM32_OTGFS_DIEPINT(epno));
@@ -2828,7 +2898,7 @@ static inline void stm32_epin_interrupt(FAR struct stm32_usbdev_s *priv)
               usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_EPIN_TXFE), (uint16_t)diepint);
 
               /* If we were waiting for TxFIFO to become empty, the we might have both
-               * XFRC and TXFE interrups pending.  Since we do the same thing for both
+               * XFRC and TXFE interrupts pending.  Since we do the same thing for both
                * cases, ignore the TXFE if we have already processed the XFRC.
                */
 
@@ -2886,6 +2956,13 @@ static inline void stm32_resumeinterrupt(FAR struct stm32_usbdev_s *priv)
   /* Restore full power -- whatever that means for this particular board */
 
   stm32_usbsuspend((struct usbdev_s *)priv, true);
+
+  /* Notify the class driver of the resume event */
+
+  if (priv->driver)
+    {
+      CLASS_RESUME(priv->driver, &priv->usbdev);
+    }
 }
 
 /*******************************************************************************
@@ -2900,7 +2977,16 @@ static inline void stm32_suspendinterrupt(FAR struct stm32_usbdev_s *priv)
 {
 #ifdef CONFIG_USBDEV_LOWPOWER
   uint32_t regval;
+#endif
 
+  /* Notify the class driver of the suspend event */
+
+  if (priv->driver)
+    {
+      CLASS_SUSPEND(priv->driver, &priv->usbdev);
+    }
+
+#ifdef CONFIG_USBDEV_LOWPOWER
   /* OTGFS_DSTS_SUSPSTS is set as long as the suspend condition is detected
    * on USB.  Check if we are still have the suspend condition, that we are
    * connected to the host, and that we have been configured.
@@ -2908,9 +2994,7 @@ static inline void stm32_suspendinterrupt(FAR struct stm32_usbdev_s *priv)
 
   regval = stm32_getreg(STM32_OTGFS_DSTS);
 
-  if ((regval & OTGFS_DSTS_SUSPSTS) != 0 &&
-      priv->connected &&
-      devstate == DEVSTATE_CONFIGURED)
+  if ((regval & OTGFS_DSTS_SUSPSTS) != 0 && devstate == DEVSTATE_CONFIGURED)
     {
       /* Switch off OTG FS clocking.  Setting OTGFS_PCGCCTL_STPPCLK stops the
        * PHY clock.
@@ -3064,6 +3148,12 @@ static inline void stm32_rxinterrupt(FAR struct stm32_usbdev_s *priv)
         datlen = GETUINT16(priv->ctrlreq.len);
         if (USB_REQ_ISOUT(priv->ctrlreq.type) && datlen > 0)
           {
+            /* Clear NAKSTS so that we can receive the data */
+
+            regval  = stm32_getreg(STM32_OTGFS_DOEPCTL0);
+            regval |= OTGFS_DOEPCTL0_CNAK;
+            stm32_putreg(regval, STM32_OTGFS_DOEPCTL0);
+
             /* Wait for the data phase. */
 
             priv->ep0state = EP0STATE_SETUP_OUT;
@@ -3655,7 +3745,7 @@ static int stm32_epout_configure(FAR struct stm32_ep_s *privep, uint8_t eptype,
         {
           regval |= OTGFS_DOEPCTL_CNAK;
         }
-      
+
       regval &= ~(OTGFS_DOEPCTL_MPSIZ_MASK | OTGFS_DOEPCTL_EPTYP_MASK);
       regval |= mpsiz;
       regval |= (eptype << OTGFS_DOEPCTL_EPTYP_SHIFT);
@@ -3751,7 +3841,7 @@ static int stm32_epin_configure(FAR struct stm32_ep_s *privep, uint8_t eptype,
         {
           regval |= OTGFS_DIEPCTL_CNAK;
         }
-      
+
       regval &= ~(OTGFS_DIEPCTL_MPSIZ_MASK | OTGFS_DIEPCTL_EPTYP_MASK | OTGFS_DIEPCTL_TXFNUM_MASK);
       regval |= mpsiz;
       regval |= (eptype << OTGFS_DIEPCTL_EPTYP_SHIFT);
@@ -4345,19 +4435,6 @@ static int stm32_epin_setstall(FAR struct stm32_ep_s *privep)
 
   regaddr = STM32_OTGFS_DIEPCTL(privep->epphy);
   regval  = stm32_getreg(regaddr);
-
-  /* Is the endpoint enabled? */
-
-  if ((regval & OTGFS_DIEPCTL_EPENA) != 0)
-    {
-      /* Yes.. the endpoint is enabled, disable it */
-
-      regval = OTGFS_DIEPCTL_EPDIS;
-    }
-  else
-    {
-      regval = 0;
-    }
 
   /* Then stall the endpoint */
 
@@ -4957,8 +5034,9 @@ static void stm32_hwinitialize(FAR struct stm32_usbdev_s *priv)
 
   /* At startup the core is in FS mode. */
 
-  /* Disable the USB global interrupt by clearing GINTMSK in the global OTG
-   * FS AHB configuration register.
+  /* Disable global interrupts by clearing the GINTMASK bit in the GAHBCFG
+   * register; Set the TXFELVL bit in the GAHBCFG register so that TxFIFO
+   * interrupts will occur when the TxFIFO is truly empty (not just half full).
    */
 
   stm32_putreg(OTGFS_GAHBCFG_TXFELVL, STM32_OTGFS_GAHBCFG);
@@ -5074,6 +5152,7 @@ static void stm32_hwinitialize(FAR struct stm32_usbdev_s *priv)
 
   stm32_putreg(0, STM32_OTGFS_DIEPMSK);
   stm32_putreg(0, STM32_OTGFS_DOEPMSK);
+  stm32_putreg(0, STM32_OTGFS_DIEPEMPMSK);
   stm32_putreg(0xffffffff, STM32_OTGFS_DAINT);
   stm32_putreg(0, STM32_OTGFS_DAINTMSK);
 
@@ -5155,10 +5234,13 @@ static void stm32_hwinitialize(FAR struct stm32_usbdev_s *priv)
   stm32_putreg(regval, STM32_OTGFS_GINTMSK);
 
   /* Enable the USB global interrupt by setting GINTMSK in the global OTG
-   * FS AHB configuration register.
+   * FS AHB configuration register; Set the TXFELVL bit in the GAHBCFG
+   * register so that TxFIFO interrupts will occur when the TxFIFO is truly
+   * empty (not just half full).
    */
 
-  stm32_putreg(OTGFS_GAHBCFG_GINTMSK | OTGFS_GAHBCFG_TXFELVL, STM32_OTGFS_GAHBCFG);
+  stm32_putreg(OTGFS_GAHBCFG_GINTMSK | OTGFS_GAHBCFG_TXFELVL,
+               STM32_OTGFS_GAHBCFG);
 }
 
 /*******************************************************************************
@@ -5314,6 +5396,7 @@ void up_usbuninitialize(void)
 
   stm32_putreg(0, STM32_OTGFS_DIEPMSK);
   stm32_putreg(0, STM32_OTGFS_DOEPMSK);
+  stm32_putreg(0, STM32_OTGFS_DIEPEMPMSK);
   stm32_putreg(0, STM32_OTGFS_DAINTMSK);
   stm32_putreg(0xffffffff, STM32_OTGFS_DAINT);
 

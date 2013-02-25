@@ -75,12 +75,15 @@ CONFIGURED_APPS += systemcmds/delay_test
 # https://pixhawk.ethz.ch/px4/dev/deamon
 # CONFIGURED_APPS += examples/px4_deamon_app
 
+# Tutorial code from
+# https://pixhawk.ethz.ch/px4/dev/debug_values
+CONFIGURED_APPS += examples/px4_mavlink_debug
+
 # Shared object broker; required by many parts of the system.
 CONFIGURED_APPS += uORB
 
 CONFIGURED_APPS += mavlink
 CONFIGURED_APPS += mavlink_onboard
-CONFIGURED_APPS += gps
 CONFIGURED_APPS += commander
 CONFIGURED_APPS += sdlog
 CONFIGURED_APPS += sensors
@@ -114,6 +117,7 @@ CONFIGURED_APPS += drivers/stm32/tone_alarm
 CONFIGURED_APPS += drivers/stm32/adc
 CONFIGURED_APPS += drivers/px4fmu
 CONFIGURED_APPS += drivers/hil
+CONFIGURED_APPS += drivers/gps
 
 # Testing stuff
 CONFIGURED_APPS += px4/sensors_bringup

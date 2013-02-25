@@ -421,7 +421,9 @@ void do_mag_calibration(int status_pub, struct vehicle_status_s *status)
 		// 	mavlink_log_info(mavlink_fd, buf);
 		// }
 
-		if (poll(fds, 1, 1000)) {
+		int poll_ret = poll(fds, 1, 1000);
+
+		if (poll_ret) {
 			orb_copy(ORB_ID(sensor_mag), sub_mag, &mag);
 
 			x[calibration_counter] = mag.x;
@@ -453,9 +455,9 @@ void do_mag_calibration(int status_pub, struct vehicle_status_s *status)
 
 			calibration_counter++;
 
-		} else {
+		} else if (poll_ret == 0) {
 			/* any poll failure for 1s is a reason to abort */
-			mavlink_log_info(mavlink_fd, "mag cal canceled");
+			mavlink_log_info(mavlink_fd, "mag cal canceled (timed out)");
 			break;
 		}
 	}
@@ -545,7 +547,7 @@ void do_mag_calibration(int status_pub, struct vehicle_status_s *status)
 		/* third beep by cal end routine */
 
 	} else {
-		mavlink_log_info(mavlink_fd, "mag calibration FAILED (NaN)");
+		mavlink_log_info(mavlink_fd, "mag calibration FAILED (NaN in sphere fit)");
 	}
 
 	/* disable calibration mode */
@@ -590,14 +592,16 @@ void do_gyro_calibration(int status_pub, struct vehicle_status_s *status)
 		/* wait blocking for new data */
 		struct pollfd fds[1] = { { .fd = sub_sensor_combined, .events = POLLIN } };
 
-		if (poll(fds, 1, 1000)) {
+		int poll_ret = poll(fds, 1, 1000);
+
+		if (poll_ret) {
 			orb_copy(ORB_ID(sensor_combined), sub_sensor_combined, &raw);
 			gyro_offset[0] += raw.gyro_rad_s[0];
 			gyro_offset[1] += raw.gyro_rad_s[1];
 			gyro_offset[2] += raw.gyro_rad_s[2];
 			calibration_counter++;
 
-		} else {
+		} else if (poll_ret == 0) {
 			/* any poll failure for 1s is a reason to abort */
 			mavlink_log_info(mavlink_fd, "gyro calibration aborted, retry");
 			return;
@@ -698,14 +702,16 @@ void do_accel_calibration(int status_pub, struct vehicle_status_s *status)
 		/* wait blocking for new data */
 		struct pollfd fds[1] = { { .fd = sub_sensor_combined, .events = POLLIN } };
 
-		if (poll(fds, 1, 1000)) {
+		int poll_ret = poll(fds, 1, 1000);
+
+		if (poll_ret) {
 			orb_copy(ORB_ID(sensor_combined), sub_sensor_combined, &raw);
 			accel_offset[0] += raw.accelerometer_m_s2[0];
 			accel_offset[1] += raw.accelerometer_m_s2[1];
 			accel_offset[2] += raw.accelerometer_m_s2[2];
 			calibration_counter++;
 
-		} else {
+		} else if (poll_ret == 0) {
 			/* any poll failure for 1s is a reason to abort */
 			mavlink_log_info(mavlink_fd, "acceleration calibration aborted");
 			return;
@@ -1221,11 +1227,10 @@ int commander_main(int argc, char *argv[])
 		thread_should_exit = false;
 		daemon_task = task_spawn("commander",
 					 SCHED_DEFAULT,
-					 SCHED_PRIORITY_MAX - 50,
-					 4000,
+					 SCHED_PRIORITY_MAX - 40,
+					 3000,
 					 commander_thread_main,
 					 (argv) ? (const char **)&argv[2] : (const char **)NULL);
-		thread_running = true;
 		exit(0);
 	}
 
@@ -1311,7 +1316,8 @@ int commander_thread_main(int argc, char *argv[])
 	memset(&home, 0, sizeof(home));
 
 	if (stat_pub < 0) {
-		warnx("ERROR: orb_advertise for topic vehicle_status failed.\n");
+		warnx("ERROR: orb_advertise for topic vehicle_status failed (uorb app running?).\n");
+		warnx("exiting.");
 		exit(ERROR);
 	}
 
@@ -1396,13 +1402,13 @@ int commander_thread_main(int argc, char *argv[])
 
 	/* now initialized */
 	commander_initialized = true;
+	thread_running = true;
 
 	uint64_t start_time = hrt_absolute_time();
 	uint64_t failsave_ll_start_time = 0;
 
 	bool state_changed = true;
 	bool param_init_forced = true;
-
 
 	while (!thread_should_exit) {
 
@@ -1459,9 +1465,6 @@ int commander_thread_main(int argc, char *argv[])
 				} else {
 					current_status.flag_external_manual_override_ok = true;
 				}
-
-			} else {
-				warnx("ARMED, rejecting sys type change\n");
 			}
 		}
 
@@ -1678,12 +1681,13 @@ int commander_thread_main(int argc, char *argv[])
 			orb_copy(ORB_ID(vehicle_gps_position), gps_sub, &gps_position);
 
 			/* check for first, long-term and valid GPS lock -> set home position */
-			float hdop_m = gps_position.eph / 100.0f;
-			float vdop_m = gps_position.epv / 100.0f;
+			float hdop_m = gps_position.eph_m;
+			float vdop_m = gps_position.epv_m;
 
 			/* check if gps fix is ok */
 			// XXX magic number
-			float dop_threshold_m = 2.0f;
+			float hdop_threshold_m = 4.0f;
+			float vdop_threshold_m = 8.0f;
 
 			/*
 			 * If horizontal dilution of precision (hdop / eph)
@@ -1694,10 +1698,12 @@ int commander_thread_main(int argc, char *argv[])
 			 * the system is currently not armed, set home
 			 * position to the current position.
 			 */
-			if (gps_position.fix_type == GPS_FIX_TYPE_3D && (hdop_m < dop_threshold_m)
-				&& (vdop_m < dop_threshold_m)
+
+			if (gps_position.fix_type == GPS_FIX_TYPE_3D
+				&& (hdop_m < hdop_threshold_m)
+				&& (vdop_m < vdop_threshold_m)
 				&& !home_position_set
-				&& (hrt_absolute_time() - gps_position.timestamp < 2000000)
+				&& (hrt_absolute_time() - gps_position.timestamp_position < 2000000)
 				&& !current_status.flag_system_armed) {
 				warnx("setting home position");
 
@@ -1706,11 +1712,11 @@ int commander_thread_main(int argc, char *argv[])
 				home.lon = gps_position.lon;
 				home.alt = gps_position.alt;
 
-				home.eph = gps_position.eph;
-				home.epv = gps_position.epv;
+				home.eph_m = gps_position.eph_m;
+				home.epv_m = gps_position.epv_m;
 
-				home.s_variance = gps_position.s_variance;
-				home.p_variance = gps_position.p_variance;
+				home.s_variance_m_s = gps_position.s_variance_m_s;
+				home.p_variance_m = gps_position.p_variance_m;
 
 				/* announce new home position */
 				if (home_pub > 0) {
