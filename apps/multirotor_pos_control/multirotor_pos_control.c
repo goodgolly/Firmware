@@ -303,8 +303,8 @@ multirotor_pos_control_thread_main(int argc, char *argv[])
 								}
 							}
 							//OVERRIDE
-							att_sp.roll_body = manual.roll;
-							att_sp.pitch_body = manual.pitch;
+							//att_sp.roll_body = manual.roll;
+							//att_sp.pitch_body = manual.pitch;
 							//END OVERRIDE
 
 							/* YAW REGLER */
