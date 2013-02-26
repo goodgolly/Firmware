@@ -170,6 +170,8 @@ multirotor_pos_control_thread_main(int argc, char *argv[])
 	memset(&att_sp, 0, sizeof(att_sp));
 	struct vehicle_status_s vehicle_status;
 	memset(&vehicle_status, 0, sizeof(vehicle_status));
+	struct sensor_combined_s sensors;
+	memset(&sensors, 0, sizeof(sensors));
 
 	/* subscribe */
 	int sensor_sub = orb_subscribe(ORB_ID(sensor_combined));
@@ -208,8 +210,8 @@ multirotor_pos_control_thread_main(int argc, char *argv[])
 	perf_counter_t mc_err_perf = perf_alloc(PC_COUNT, "multirotor_pos_control_err");
 
 	struct pollfd fds[2] = {
-					{ .fd = vicon_pos_sub, .events = POLLIN }, //vicon_pos_sub
-					//{ .fd = sensor_sub, .events = POLLIN }, //ca. 70 Hz
+					//{ .fd = vicon_pos_sub, .events = POLLIN }, //vicon_pos_sub
+					{ .fd = sensor_sub, .events = POLLIN }, //ca. 130 Hz
 					{ .fd = sub_params,   .events = POLLIN },
 				};
 
@@ -240,22 +242,21 @@ multirotor_pos_control_thread_main(int argc, char *argv[])
 					}
 					/* only run controller if vicon / sensors changed */
 					if (fds[0].revents & POLLIN) {
-						//float dT = (hrt_absolute_time() - last_time) / 1000000.0f;
-						//last_time = hrt_absolute_time();
-						//printf("[multirotor_att_control_main] dT: %8.4f\n", (double)(dT));
+						/*float dT = (hrt_absolute_time() - last_time) / 1000000.0f;
+						last_time = hrt_absolute_time();
+						static int printcounter = 0;
+						if (printcounter == 50000) {
+							printcounter = 0;
+							printf("[posCTRL] dT: %8.4f\n", (double)(dT));
+						}
+						printcounter++;*/
 
 						orb_copy(ORB_ID(manual_control_setpoint), manual_sub, &manual);
 						orb_copy(ORB_ID(vehicle_attitude), att_sub, &att);
 						orb_copy(ORB_ID(vehicle_local_position), local_pos_est_sub, &local_pos_est);
 						orb_copy(ORB_ID(vehicle_vicon_position), vicon_pos_sub, &vicon_pos);
 						orb_copy(ORB_ID(vehicle_status), vehicle_status_sub, &vehicle_status);
-
-						/*static int printcounter = 0;
-						if (printcounter == 50000) {
-							printcounter = 0;
-							printf("[posCTRL] bool vehicle_status.useBARO: %s\n", (vehicle_status.flag_useBARO)? "true" : "false");
-						}
-						printcounter++;*/
+						orb_copy(ORB_ID(sensor_combined), sensor_sub, &sensors);
 
 						if (vehicle_status.state_machine == SYSTEM_STATE_AUTO) {
 							/* ROLL & PITCH REGLER */
@@ -301,8 +302,10 @@ multirotor_pos_control_thread_main(int argc, char *argv[])
 									att_sp.pitch_body = -pitch_limit;
 								}
 							}
-							/* checked that limitation works correctly */
-							//printf("[multirotor_att_control_main] att_sp.roll_body: %8.4f\n", (double)(att_sp.roll_body));
+							//OVERRIDE
+							att_sp.roll_body = manual.roll;
+							att_sp.pitch_body = manual.pitch;
+							//END OVERRIDE
 
 							/* YAW REGLER */
 							if ((manual.yaw < -0.01f || 0.01f < manual.yaw) && manual.throttle > 0.3f) {
