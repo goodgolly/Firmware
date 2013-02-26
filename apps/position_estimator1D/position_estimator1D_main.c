@@ -194,7 +194,8 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 	//static float P_y_aposteriori[9] = {0.0f ,0.0f, 0.0f, 0.0f ,0.0f, 0.0f, 0.0f ,0.0f, 0.0f};
 
 	const static float dT_const = 1.0f/120.0f;
-	static float posUdateFreq = 0.0f;
+	static float posUpdateFreq = 50.0f;
+	static float sigma = 0.0f;
 
 	//computed from dlqe in matlab
 	const static float K[3] = {0.2151f, 2.9154f, 19.7599f};
@@ -225,6 +226,7 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 
 	/* Initialize filter */
 	kalman_dlqe2_initialize();
+
 
 	/* declare and safely initialize all structs */
 	struct sensor_combined_s sensor;
@@ -271,12 +273,13 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 	/* read from param to clear updated flag */
 	struct parameter_update_s update;
 	orb_copy(ORB_ID(parameter_update), sub_params, &update);
-	/* update parameters */
+	/* FIRST PARAMETER UPDATE */
 	parameters_update(&pos1D_param_handles, &pos1D_params);
 	local_flag_useBARO = ((pos1D_params.useBARO >= 0.9f) && (pos1D_params.useBARO <= 1.1f));
 	local_flag_useGPS = ((pos1D_params.useGPS >= 0.9f) && (pos1D_params.useGPS <= 1.1f));
-	posUdateFreq = pos1D_params.updateFreq;
-	/* END FIRST PARAMETER READ */
+	posUpdateFreq = pos1D_params.uFreq;
+	sigma = pos1D_params.sigma;
+	/* END FIRST PARAMETER UPDATE */
 
 	if(local_flag_useGPS){
 		mavlink_log_info(mavlink_fd, "[pos_est1D] I'm using GPS");
@@ -360,9 +363,12 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 				parameters_update(&pos1D_param_handles, &pos1D_params);
 				local_flag_useBARO = ((pos1D_params.useBARO >= 0.9f) && (pos1D_params.useBARO <= 1.1f));
 				local_flag_useGPS = ((pos1D_params.useGPS >= 0.9f) && (pos1D_params.useGPS <= 1.1f));
-				posUdateFreq = pos1D_params.updateFreq;
-				printf("[pos_est1D] bool local_useBARO in update: %s\n", (local_flag_useBARO)? "true" : "false");
-				printf("[pos_est1D] bool local_useGPS in update: %s\n", (local_flag_useGPS)? "true" : "false");
+				posUpdateFreq = pos1D_params.uFreq;
+				sigma = pos1D_params.sigma;
+				//printf("[pos_est1D] bool local_useBARO in update: %s\n", (local_flag_useBARO)? "true" : "false");
+				//printf("[pos_est1D] bool local_useGPS in update: %s\n", (local_flag_useGPS)? "true" : "false");
+				printf("[pos_est1D] posUpdateFreq: %8.4f\n", (double)(posUpdateFreq));
+				printf("[pos_est1D] sigma %8.4f\n", (double)(sigma));
 			}
 			if (fds[0].revents & POLLIN) {
 				/* copy actuator raw data into local buffer */
