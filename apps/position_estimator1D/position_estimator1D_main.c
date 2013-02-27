@@ -430,7 +430,7 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 					}
 				}else{
 					static int printcounter = 0;
-					if (printcounter == 50000){
+					if (printcounter == 5000){
 						printcounter = 0;
 						printf("[posCTRL] dT: %8.4f\n", (double)(vicon_pos.x));
 					}
