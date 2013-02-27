@@ -198,8 +198,9 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 	static float sigma = 0.0f;
 
 	//computed from dlqe in matlab
-	const static float K_xy[3] = {0.2151f, 2.9154f, 19.7599f};
-	const static float K_z[3] = {0.0248f, 0.0377f, 0.0287f};
+	const static float K_vicon[3] = {0.2151f, 2.9154f, 19.7599f};
+	const static float K_baro[3] = {0.0248f, 0.0377f, 0.0287f};
+	static float K[3] = {0.0f, 0.0f, 0.0f};
 
 	int baro_loop_cnt = 0;
 	int baro_loop_end = 70; /* measurement for 1 second */
@@ -419,38 +420,49 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 						float z_est = 0.0f;
 						if(local_flag_baroINITdone && local_flag_useBARO){
 							//printf("use BARO\n");
+							K[0] = K_baro[0];
+							K[1] = K_baro[1];
+							K[2] = K_baro[2];
 							z_est = -p0_Pa*log(p0_Pa/(sensor.baro_pres_mbar*100))/(rho0*const_earth_gravity);
 						}else{
 							//printf("NOT use BARO\n");
 							z_est = alt_current - (gps.alt) * 1e-3;
 						}
-						local_pos_est.z = z_est;
-						local_pos_est.vz = 0.0f;
+						kalman_dlqe2(dT_const,K[0],K[1],K[2],x_z_aposteriori_k,z_est,x_z_aposteriori);
+						memcpy(x_z_aposteriori_k, x_z_aposteriori, sizeof(x_z_aposteriori));
+						local_pos_est.z = x_z_aposteriori_k[0];
+						local_pos_est.vz = x_z_aposteriori_k[1];
 						orb_publish(ORB_ID(vehicle_local_position), local_pos_est_pub, &local_pos_est);
 					}
 				}else{
 					static int printcounter = 0;
-					if (printcounter == 5000){
+					if (printcounter == 50000){
 						printcounter = 0;
 						printf("[posCTRL] dT: %8.4f\n", (double)(vicon_pos.x));
 					}
 					printcounter++;
 					/* pos/vel gathered in earth frame = vicon frame */
 					//kalman_dlqe3(dT_const,K[0],K[1],K[2],x_x_aposteriori_k,vicon_pos.x,1.0f,0.0f,sigma,x_x_aposteriori);
-					kalman_dlqe2(dT_const,K_xy[0],K_xy[1],K_xy[2],x_x_aposteriori_k,vicon_pos.x,x_x_aposteriori);
+					kalman_dlqe2(dT_const,K_vicon[0],K_vicon[1],K_vicon[2],x_x_aposteriori_k,vicon_pos.x,x_x_aposteriori);
 					memcpy(x_x_aposteriori_k, x_x_aposteriori, sizeof(x_x_aposteriori));
 					//kalman_dlqe3(dT_const,K[0],K[1],K[2],x_y_aposteriori_k,vicon_pos.y,1.0f,0.0f,sigma,x_y_aposteriori);
-					kalman_dlqe2(dT_const,K_xy[0],K_xy[1],K_xy[2],x_y_aposteriori_k,vicon_pos.y,x_y_aposteriori);
+					kalman_dlqe2(dT_const,K_vicon[0],K_vicon[1],K_vicon[2],x_y_aposteriori_k,vicon_pos.y,x_y_aposteriori);
 					memcpy(x_y_aposteriori_k, x_y_aposteriori, sizeof(x_y_aposteriori));
 					float z_est = 0.0f;
 					if(local_flag_baroINITdone && local_flag_useBARO){
 						//printf("use BARO\n");
 						z_est = -p0_Pa*log(p0_Pa/(sensor.baro_pres_mbar*100))/(rho0*const_earth_gravity);
+						K[0] = K_baro[0];
+						K[1] = K_baro[1];
+						K[2] = K_baro[2];
 					}else{
 						//printf("NOT use BARO\n");
 						z_est = vicon_pos.z;
+						K[0] = K_vicon[0];
+						K[1] = K_vicon[1];
+						K[2] = K_vicon[2];
 					}
-					kalman_dlqe2(dT_const,K_z[0],K_z[1],K_z[2],x_z_aposteriori_k,z_est,x_z_aposteriori);
+					kalman_dlqe2(dT_const,K[0],K[1],K[2],x_z_aposteriori_k,z_est,x_z_aposteriori);
 					memcpy(x_z_aposteriori_k, x_z_aposteriori, sizeof(x_z_aposteriori));
 					local_pos_est.x = x_x_aposteriori_k[0];
 					local_pos_est.vx = x_x_aposteriori_k[1];
