@@ -148,8 +148,7 @@ int multirotor_pos_control_main(int argc, char *argv[])
 }
 
 static int
-multirotor_pos_control_thread_main(int argc, char *argv[])
-{
+multirotor_pos_control_thread_main(int argc, char *argv[]){
 	/* welcome user */
 	printf("[multirotor pos control] Control started, taking over position control\n");
 	int mavlink_fd = open(MAVLINK_LOG_DEVICE, 0);
@@ -187,15 +186,12 @@ multirotor_pos_control_thread_main(int argc, char *argv[])
 	/* publish attitude setpoint */
 	orb_advert_t att_sp_pub = orb_advertise(ORB_ID(vehicle_attitude_setpoint), &att_sp);
 
-	static float rotMatrix[4] = {1.0f,  0.0f,
-								0.0f,  1.0f};
-
+	static float rotMatrix[4] = {1.0f,  0.0f, 0.0f,  1.0f};
 	static float pos_ctrl_gain_p = 0.8f;
 	static float pos_ctrl_gain_d = 0.8f;
 	static float z_ctrl_gain_p = 0.8f;
 	static float z_ctrl_gain_d = 0.6f;
 	static float z_pos_setpoint = -1.0f;
-
 	const float pitch_limit = 0.33f;
 	const float roll_limit = 0.33f;
 	const float thrust_limit_upper = 0.5f;
@@ -349,9 +345,7 @@ multirotor_pos_control_thread_main(int argc, char *argv[])
 
 	printf("[multirotor pos control] ending now...\n");
 	mavlink_log_info(mavlink_fd, "[multirotor pos control] ending now...\n");
-
 	thread_running = false;
-
 	fflush(stdout);
 	return 0;
 }

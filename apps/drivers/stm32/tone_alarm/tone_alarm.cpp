@@ -202,7 +202,7 @@ public:
 	virtual ssize_t		write(file *filp, const char *buffer, size_t len);
 
 private:
-	static const unsigned	_max_pattern = 6;
+	static const unsigned	_max_pattern = 7;
 	static const unsigned	_pattern_none = _max_pattern + 1;
 	static const unsigned	_pattern_user = 0;
 	static const unsigned	_max_pattern_len = 40;
@@ -227,7 +227,7 @@ private:
 /* predefined patterns for alarms 1-_max_pattern */
 const tone_note ToneAlarm::_patterns[_max_pattern][_max_pattern_len] = {
 	{
-		{TONE_NOTE_A7, 12},
+		{TONE_NOTE_A7, 12}, //1
 		{TONE_NOTE_D8, 12},
 		{TONE_NOTE_C8, 12},
 		{TONE_NOTE_A7, 12},
@@ -240,12 +240,12 @@ const tone_note ToneAlarm::_patterns[_max_pattern][_max_pattern_len] = {
 		{TONE_NOTE_D8, 4},
 		{TONE_NOTE_C8, 4},
 	},
-	{{TONE_NOTE_B6, 100}, {TONE_NOTE_B6, DURATION_REPEAT}},
-	{{TONE_NOTE_C7, 100}},
-	{{TONE_NOTE_D7, 100}},
-	{{TONE_NOTE_E7, 100}},
+	{{TONE_NOTE_B6, 100}, {TONE_NOTE_B6, DURATION_REPEAT}},  //2
+	{{TONE_NOTE_C7, 100}}, //3
+	{{TONE_NOTE_D7, 100}}, //4
+	{{TONE_NOTE_E7, 100}}, //5
 	{
-		//This is tetris ;)
+		//This is tetris ;) //6
 		{TONE_NOTE_C6, 40},
 		{TONE_NOTE_G5, 20},
 		{TONE_NOTE_G5S, 20},
@@ -283,7 +283,8 @@ const tone_note ToneAlarm::_patterns[_max_pattern][_max_pattern_len] = {
 		{TONE_NOTE_G5S, 40},
 		{TONE_NOTE_F5, 40},
 		{TONE_NOTE_F5, 60},
-	}
+	},
+	{{TONE_NOTE_D7, 10}} //7}
 };
 
 const uint16_t ToneAlarm::_notes[_note_max] = {

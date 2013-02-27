@@ -59,6 +59,7 @@ CSRCS		 = position_estimator1D_main.c \
 			   codegen/kalman_dlqe3_initialize.c \
 			   codegen/kalman_dlqe3_terminate.c \
 			   codegen/kalman_dlqe3_data.c \
-			   codegen/randn.c 
+			   codegen/randn.c \
+			   sounds.c
 			   
 include $(APPDIR)/mk/app.mk

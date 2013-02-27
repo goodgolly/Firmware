@@ -44,11 +44,12 @@
 
 struct position_estimator1D_params {
 	float QQ[3];
+	float addNoise;
 	float sigma;
 	float R;
 	float useGPS;
 	float useBARO;
-	float uFreq;
+	float viconDivider;
 	float accThres;
 	float flyingT;
 	float velDecay;
@@ -56,11 +57,12 @@ struct position_estimator1D_params {
 
 struct position_estimator1D_param_handles {
 	param_t q11, q22, q33;
+	param_t addNoise;
 	param_t sigma;
 	param_t r;
 	param_t useGPS_param_handle;
 	param_t useBARO_param_handle;
-	param_t uFreq_param_handle;
+	param_t viconDivider_param_handle;
 	param_t accThreshold_param_handle;
 	param_t flyingThreshold_param_handle;
 	param_t velDecay_param_handle;
