@@ -62,6 +62,7 @@
 #include <uORB/topics/vehicle_status.h>
 #include <uORB/topics/vehicle_vicon_position.h>
 #include <uORB/topics/vehicle_local_position.h>
+#include <uORB/topics/vehicle_local_position_setpoint.h>
 #include <uORB/topics/vehicle_gps_position.h>
 #include <mavlink/mavlink_log.h>
 #include <poll.h>
@@ -198,14 +199,12 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 	static int viconCnt = 0;
 	static int viconCntMax = 0;
 	static float debug = 0.0f;
-	//static int soundCnt = 0;
-	//static int soundCntMax = 260;
 	static float posX = 0.0f;
 	static float posY = 0.0f;
 	static float posZ = 0.0f;
-	//static float posOldX = 0.0f;
-	//static float posOldY = 0.0f;
-	//static float posOldZ = 0.0f;
+	static float local_pos_x = 0.0f;
+	static float local_pos_y = 0.0f;
+	static float local_pos_z = -0.8f;
 
 	static float acc_x_body = 0.0f;
 	static float acc_y_body = 0.0f;
@@ -240,6 +239,8 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 	memset(&gps, 0, sizeof(gps));
 	struct vehicle_local_position_s local_pos_est;
 	memset(&local_pos_est, 0, sizeof(local_pos_est));
+	struct vehicle_local_position_setpoint_s local_pos_sp;
+	memset(&local_pos_sp, 0, sizeof(local_pos_sp));
 
 	/* subscribe */
 	int sensor_sub = orb_subscribe(ORB_ID(sensor_combined));
@@ -253,6 +254,7 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 
 	/* advertise */
 	orb_advert_t local_pos_est_pub = orb_advertise(ORB_ID(vehicle_local_position), &local_pos_est);
+	orb_advert_t local_pos_sp_pub = orb_advertise(ORB_ID(vehicle_local_position_setpoint), &local_pos_sp);
 
 	struct position_estimator1D_params pos1D_params;
 	struct position_estimator1D_param_handles pos1D_param_handles;
@@ -272,10 +274,10 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 	viconCntMax = (int)(pos1D_params.viconDivider);
 	sigma = pos1D_params.sigma;
 	addNoise = pos1D_params.addNoise;
-
+	local_pos_x = pos1D_params.loc_sp_x;
+	local_pos_y = pos1D_params.loc_sp_y;
+	local_pos_z = pos1D_params.loc_sp_z;
 	/* END FIRST PARAMETER UPDATE */
-	//int buzzer = open("/dev/tone_alarm", O_WRONLY);
-	sounds_init();
 
 	if(local_flag_useGPS){
 		mavlink_log_info(mavlink_fd, "[pos_est1D] I'm using GPS");
@@ -368,16 +370,17 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 				viconCntMax = (int)(pos1D_params.viconDivider);
 				sigma = pos1D_params.sigma;
 				addNoise = pos1D_params.addNoise;
-				printf("[pos_est1D] viconCntMax: %8.4f\n", (double)(viconCntMax));
-				//printf("[pos_est1D] sigma %8.4f\n", (double)(pos1D_params.sigma));
+				/* write local_pos_sp from pos_estimator to pos controller */
+				local_pos_sp.x = pos1D_params.loc_sp_x;
+				local_pos_sp.y = pos1D_params.loc_sp_y;
+				local_pos_sp.z = pos1D_params.loc_sp_z;
+				orb_publish(ORB_ID(vehicle_local_position), local_pos_est_pub, &local_pos_est);
+				printf("[pos_est1D] local_pos_z: %8.4f\n", (double)(local_pos_sp.z));
 			}
 			static float viconUpdate = 0.0f; /* default is no viconUpdate */
 			if (fds2[1].revents & POLLIN) {
 				/* new vicon position */
 				orb_copy(ORB_ID(vehicle_vicon_position), vicon_pos_sub, &vicon_pos);
-				//posOldX = posNewX;
-				//posOldY = posNewY;
-				//posOldZ = posNewZ;
 				posX = vicon_pos.x;
 				posY = vicon_pos.y;
 				posZ = vicon_pos.z;
@@ -444,19 +447,23 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 				memcpy(x_y_aposteriori_k, x_y_aposteriori, sizeof(x_y_aposteriori));
 				/* z-position/velocity estimation in earth frame = vicon frame */
 				float z_est = 0.0f;
+				float local_sigma = 0.0f;
 				if(local_flag_baroINITdone && local_flag_useBARO){
 					z_est = -p0_Pa*log(p0_Pa/(sensor.baro_pres_mbar*100))/(rho0*const_earth_gravity);
-					K[0] = K_baro[0];
-					K[1] = K_baro[1];
-					K[2] = K_baro[2];
+					K[0] = K_vicon_50Hz[0];
+					K[1] = K_vicon_50Hz[1];
+					K[2] = K_vicon_50Hz[2];
+					viconUpdate = 1.0f; /* always enable the update, cause baro update = 200 Hz */
+					local_sigma = 0.0f; /* don't add noise on barometer in any case */
 				}else{
 					z_est = posZ;
 					K[0] = K_vicon_50Hz[0];
 					K[1] = K_vicon_50Hz[1];
 					K[2] = K_vicon_50Hz[2];
+					local_sigma = sigma;
 				}
 				//kalman_dlqe2(dT_const,K[0],K[1],K[2],x_z_aposteriori_k,z_est,x_z_aposteriori);
-				kalman_dlqe3(dT_const_50,K[0],K[1],K[2],x_z_aposteriori_k,posZ,viconUpdate,addNoise,sigma,x_z_aposteriori);
+				kalman_dlqe3(dT_const_50,K[0],K[1],K[2],x_z_aposteriori_k,z_est,viconUpdate,addNoise,local_sigma,x_z_aposteriori);
 				memcpy(x_z_aposteriori_k, x_z_aposteriori, sizeof(x_z_aposteriori));
 				local_pos_est.x = x_x_aposteriori_k[0];
 				local_pos_est.vx = x_x_aposteriori_k[1];

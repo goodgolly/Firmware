@@ -59,6 +59,9 @@ PARAM_DEFINE_FLOAT(POS_EST_useBARO, 0.0f);
 PARAM_DEFINE_FLOAT(POS_EST_accThres, 0.1f);
 PARAM_DEFINE_FLOAT(POS_EST_flyingT, 230.0f);
 PARAM_DEFINE_FLOAT(POS_EST_velDecay, 0.995f);
+PARAM_DEFINE_FLOAT(POS_EST_loc_sp_x, 0.0f);
+PARAM_DEFINE_FLOAT(POS_EST_loc_sp_y, 0.0f);
+PARAM_DEFINE_FLOAT(POS_EST_loc_sp_z, -0.8f);
 
 int parameters_init(struct position_estimator1D_param_handles *h)
 {
@@ -75,6 +78,9 @@ int parameters_init(struct position_estimator1D_param_handles *h)
 	h->accThreshold_param_handle = param_find("POS_EST_accThres");
 	h->flyingThreshold_param_handle = param_find("POS_EST_flyingT");
 	h->velDecay_param_handle = param_find("POS_EST_velDecay");
+	h->loc_sp_x_param_handle = param_find("POS_EST_loc_sp_x");
+	h->loc_sp_y_param_handle = param_find("POS_EST_loc_sp_y");
+	h->loc_sp_z_param_handle = param_find("POS_EST_loc_sp_z");
 	return OK;
 }
 
@@ -92,5 +98,8 @@ int parameters_update(const struct position_estimator1D_param_handles *h, struct
 	param_get(h->accThreshold_param_handle, &(p->accThres));
 	param_get(h->flyingThreshold_param_handle, &(p->flyingT));
 	param_get(h->velDecay_param_handle, &(p->velDecay));
+	param_get(h->loc_sp_x_param_handle, &(p->loc_sp_x));
+	param_get(h->loc_sp_y_param_handle, &(p->loc_sp_y));
+	param_get(h->loc_sp_z_param_handle, &(p->loc_sp_z));
 	return OK;
 }

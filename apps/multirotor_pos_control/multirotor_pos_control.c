@@ -60,7 +60,7 @@
 #include <uORB/topics/vehicle_status.h>
 #include <uORB/topics/manual_control_setpoint.h>
 #include <uORB/topics/vehicle_attitude_setpoint.h>
-//#include <uORB/topics/vehicle_local_position_setpoint.h>
+#include <uORB/topics/vehicle_local_position_setpoint.h>
 #include <uORB/topics/vehicle_vicon_position.h>
 #include <uORB/topics/vehicle_local_position.h>
 #include <uORB/topics/debug_key_value.h>
@@ -158,7 +158,8 @@ multirotor_pos_control_thread_main(int argc, char *argv[]){
 	struct vehicle_attitude_s att;
 	memset(&att, 0, sizeof(att));
 	//struct vehicle_global_position_setpoint_s global_pos_sp;
-	//struct vehicle_local_position_setpoint_s local_pos_sp;
+	struct vehicle_local_position_setpoint_s local_pos_sp;
+	memset(&local_pos_sp, 0, sizeof(local_pos_sp));
 	struct vehicle_local_position_s local_pos_est;
 	memset(&local_pos_est, 0, sizeof(local_pos_est));
 	struct vehicle_vicon_position_s vicon_pos;
@@ -179,7 +180,7 @@ multirotor_pos_control_thread_main(int argc, char *argv[]){
 	int manual_sub = orb_subscribe(ORB_ID(manual_control_setpoint));
 	int vicon_pos_sub = orb_subscribe(ORB_ID(vehicle_vicon_position));
 	//int global_pos_sp_sub = orb_subscribe(ORB_ID(vehicle_global_position_setpoint));
-	//int local_pos_sp_sub = orb_subscribe(ORB_ID(vehicle_local_position_setpoint));
+	int local_pos_sp_sub = orb_subscribe(ORB_ID(vehicle_local_position_setpoint));
 	int local_pos_est_sub = orb_subscribe(ORB_ID(vehicle_local_position));
 	int vehicle_status_sub = orb_subscribe(ORB_ID(vehicle_status));
 
@@ -236,7 +237,6 @@ multirotor_pos_control_thread_main(int argc, char *argv[]){
 						z_pos_setpoint = pos_params.height_sp;
 						//printf("[multirotor_pos_control] pos_params.k1: %8.4f\t pos.params.k2: %8.4f\n", (double)(pos_params.k1), (double)(pos_params.k2));
 					}
-					/* only run controller if vicon / sensors changed */
 					if (fds[0].revents & POLLIN) {
 						/*float dT = (hrt_absolute_time() - last_time) / 1000000.0f;
 						last_time = hrt_absolute_time();
@@ -250,14 +250,15 @@ multirotor_pos_control_thread_main(int argc, char *argv[]){
 						orb_copy(ORB_ID(manual_control_setpoint), manual_sub, &manual);
 						orb_copy(ORB_ID(vehicle_attitude), att_sub, &att);
 						orb_copy(ORB_ID(vehicle_local_position), local_pos_est_sub, &local_pos_est);
+						orb_copy(ORB_ID(vehicle_local_position_setpoint), local_pos_sp_sub, &local_pos_sp);
 						orb_copy(ORB_ID(vehicle_vicon_position), vicon_pos_sub, &vicon_pos);
 						orb_copy(ORB_ID(vehicle_status), vehicle_status_sub, &vehicle_status);
 						orb_copy(ORB_ID(sensor_combined), sensor_sub, &sensors);
 
 						if (vehicle_status.state_machine == SYSTEM_STATE_AUTO) {
 							/* ROLL & PITCH REGLER */
-							float y_pos_setpoint = 0.0f;
-							float x_pos_setpoint = 0.0f;
+							float y_pos_setpoint = local_pos_sp.y;
+							float x_pos_setpoint = local_pos_sp.x;
 							float y_pos_err_earth = -(local_pos_est.y - y_pos_setpoint);
 							float x_pos_err_earth = (local_pos_est.x - x_pos_setpoint);
 							float y_vel_setpoint = 0.0f;
@@ -313,7 +314,7 @@ multirotor_pos_control_thread_main(int argc, char *argv[]){
 							//printf("[multirotor_pos_control] vicon_pos.yaw: %8.4f\n", (double)(vicon_pos.yaw));
 
 							/* Z REGLER, PD mit Feedforward */
-							float z_vel_setpoint = 0.0f;
+							float z_vel_setpoint = local_pos_sp.z;
 							float z_pos_err_earth = (local_pos_est.z - z_pos_setpoint);
 							float z_vel_err_earth = (local_pos_est.vz - z_vel_setpoint);
 							float z_ctrl_thrust_err = z_pos_err_earth*z_ctrl_gain_p + z_vel_err_earth*z_ctrl_gain_d;
