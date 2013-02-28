@@ -178,12 +178,15 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 	static float x_x_aposteriori[3] = {0.0f, 0.0f, 0.0f};
 	static float x_y_aposteriori[3] = {1.0f, 0.0f, 0.0f};
 	static float x_z_aposteriori[3] = {1.0f, 0.0f, 0.0f};
-	const static float dT_const = 1.0f/120.0f;
+	const static float dT_const_120 = 1.0f/120.0f;
+	const static float dT_const_50 = 1.0f/50.0f;
+
 	//static float posUpdateFreq = 50.0f;
 	static float addNoise = 0.0f;
 	static float sigma = 0.0f;
 	//computed from dlqe in matlab
-	const static float K_vicon[3] = {0.2151f, 2.9154f, 19.7599f};
+	const static float K_vicon_130Hz[3] = {0.2151f, 2.9154f, 19.7599f};
+	const static float K_vicon_50Hz[3] = {0.5297f, 0.9873f, 0.9201f};
 	const static float K_baro[3] = {0.0248f, 0.0377f, 0.0287f};
 	static float K[3] = {0.0f, 0.0f, 0.0f};
 	int baro_loop_cnt = 0;
@@ -197,7 +200,12 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 	static float debug = 0.0f;
 	//static int soundCnt = 0;
 	//static int soundCntMax = 260;
-
+	static float posX = 0.0f;
+	static float posY = 0.0f;
+	static float posZ = 0.0f;
+	//static float posOldX = 0.0f;
+	//static float posOldY = 0.0f;
+	//static float posOldZ = 0.0f;
 
 	static float acc_x_body = 0.0f;
 	static float acc_y_body = 0.0f;
@@ -331,20 +339,25 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 	uint64_t last_time = 0;
 	thread_running = true;
 
-	struct pollfd fds2[2] = {
-		{ .fd = vehicle_attitude_sub,   .events = POLLIN }, //130 Hz gemaess printf, 260 gemaess beepcounter
+	struct pollfd fds2[3] = {
+		{ .fd = vehicle_gps_sub,   .events = POLLIN }, //130 Hz gemaess printf, 260 gemaess beepcounter
+		{ .fd = vicon_pos_sub,   .events = POLLIN },
 		{ .fd = sub_params,   .events = POLLIN },
 	};
 
 	/**< main_loop */
 	while (!thread_should_exit) {
-		int ret = poll(fds2, 2, 1000);  //wait maximal this time
+		int ret = poll(fds2, 3, 20);  //wait maximal this 20 ms = 50 Hz minimum rate
 		if (ret < 0) {
 			/* poll error */
-		} else if (ret == 0) {
-			/* no return value, ignore */
 		} else {
-			if (fds2[1].revents & POLLIN){
+			if (fds2[0].revents & POLLIN) {
+				/* new GPS value */
+				orb_copy(ORB_ID(vehicle_gps_position), vehicle_gps_sub, &gps);
+				/* do nothing at the moment*/
+			}
+			if (fds2[2].revents & POLLIN){
+				/* new parameter */
 				/* read from param to clear updated flag */
 				struct parameter_update_s update;
 				orb_copy(ORB_ID(parameter_update), sub_params, &update);
@@ -358,112 +371,103 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 				printf("[pos_est1D] viconCntMax: %8.4f\n", (double)(viconCntMax));
 				//printf("[pos_est1D] sigma %8.4f\n", (double)(pos1D_params.sigma));
 			}
-			if (fds2[0].revents & POLLIN) {
-				/* copy actuator raw data into local buffer */
-				orb_copy(ORB_ID(actuator_controls_effective_0), actuator_eff_sub, &act_eff);
-				orb_copy(ORB_ID(vehicle_attitude), vehicle_attitude_sub, &att);
-				orb_copy(ORB_ID(vehicle_status), vehicle_status_sub, &vehicle_status);
-				orb_copy(ORB_ID(sensor_combined), sensor_sub, &sensor);
-				if(local_flag_useGPS){
-					orb_copy(ORB_ID(vehicle_gps_position), vehicle_gps_sub, &gps);
-				}else{
-					orb_copy(ORB_ID(vehicle_vicon_position), vicon_pos_sub, &vicon_pos);
-				}
+			static float viconUpdate = 0.0f; /* default is no viconUpdate */
+			if (fds2[1].revents & POLLIN) {
+				/* new vicon position */
+				orb_copy(ORB_ID(vehicle_vicon_position), vicon_pos_sub, &vicon_pos);
+				//posOldX = posNewX;
+				//posOldY = posNewY;
+				//posOldZ = posNewZ;
+				posX = vicon_pos.x;
+				posY = vicon_pos.y;
+				posZ = vicon_pos.z;
+				viconUpdate = 1.0f; /* set flag for vicon update */
+			} /* end of poll call for vicon updates */
 
-				// barometric pressure estimation at start up
-				if (!local_flag_baroINITdone){
-					// mean calculation over several measurements
-					if(baro_loop_cnt<baro_loop_end) {
-						p0_Pa += (sensor.baro_pres_mbar*100);
-						baro_loop_cnt++;
-					}else{
-						p0_Pa /= (float)(baro_loop_cnt);
-						local_flag_baroINITdone = true;
-						char *baro_m_start = "barometer initialized with p0 = ";
-						char p0_char[15];
-						sprintf(p0_char, "%8.2f", p0_Pa/100);
-						char *baro_m_end = " mbar";
-						char str[80];
-						strcpy(str,baro_m_start);
-						strcat(str,p0_char);
-						strcat(str,baro_m_end);
-						mavlink_log_info(mavlink_fd, str);
-					}
-				}
-				if(local_flag_useGPS){
-					/* initialize map projection with the last estimate (not at full rate) */
-					if (gps.fix_type > 2) {
-						/* Project gps lat lon (Geographic coordinate system) to plane*/
-						map_projection_project(((double)(gps.lat)) * 1e-7, ((double)(gps.lon)) * 1e-7, &(z[0]), &(z[1]));
-						local_pos_est.x = z[0];
-						local_pos_est.vx = 0.0f;
-						local_pos_est.y = z[1];
-						local_pos_est.vy = 0.0f;
-						/* negative offset from initialization altitude */
-						float z_est = 0.0f;
-						if(local_flag_baroINITdone && local_flag_useBARO){
-							//printf("use BARO\n");
-							K[0] = K_baro[0];
-							K[1] = K_baro[1];
-							K[2] = K_baro[2];
-							z_est = -p0_Pa*log(p0_Pa/(sensor.baro_pres_mbar*100))/(rho0*const_earth_gravity);
-						}else{
-							//printf("NOT use BARO\n");
-							z_est = alt_current - (gps.alt) * 1e-3;
-						}
-						kalman_dlqe2(dT_const,K[0],K[1],K[2],x_z_aposteriori_k,z_est,x_z_aposteriori);
-						memcpy(x_z_aposteriori_k, x_z_aposteriori, sizeof(x_z_aposteriori));
-						local_pos_est.z = x_z_aposteriori_k[0];
-						local_pos_est.vz = x_z_aposteriori_k[1];
-						orb_publish(ORB_ID(vehicle_local_position), local_pos_est_pub, &local_pos_est);
-					}
+			/* Main estimator loop */
+			orb_copy(ORB_ID(actuator_controls_effective_0), actuator_eff_sub, &act_eff);
+			orb_copy(ORB_ID(vehicle_attitude), vehicle_attitude_sub, &att);
+			orb_copy(ORB_ID(vehicle_status), vehicle_status_sub, &vehicle_status);
+			orb_copy(ORB_ID(sensor_combined), sensor_sub, &sensor);
+			// barometric pressure estimation at start up
+			if (!local_flag_baroINITdone){
+				// mean calculation over several measurements
+				if(baro_loop_cnt<baro_loop_end) {
+					p0_Pa += (sensor.baro_pres_mbar*100);
+					baro_loop_cnt++;
 				}else{
-					/* limit vicon update frequency, that is divide incoming signal and only feed in */
-					static float viconUpdate = 0.0f;
-
-					if(viconCnt == viconCntMax){
-						viconUpdate = 1.0f;
-						viconCnt = 0;
-						//soundCnt = viconCntMax*2;
-						debug = viconCntMax;
-					}
-					viconCnt++;
-					//soundCnt++;
-					//if(soundCnt == soundCntMax){
-						//tune_sonar();
-						//soundCnt = 0;
-					//}
-					/* x-y-position/velocity estimation in earth frame = vicon frame */
-					kalman_dlqe3(dT_const,K_vicon[0],K_vicon[1],K_vicon[2],x_x_aposteriori_k,vicon_pos.x,viconUpdate,addNoise,sigma,x_x_aposteriori);
-					memcpy(x_x_aposteriori_k, x_x_aposteriori, sizeof(x_x_aposteriori));
-					kalman_dlqe3(dT_const,K_vicon[0],K_vicon[1],K_vicon[2],x_y_aposteriori_k,vicon_pos.y,viconUpdate,addNoise,sigma,x_y_aposteriori);
-					memcpy(x_y_aposteriori_k, x_y_aposteriori, sizeof(x_y_aposteriori));
-					/* z-position/velocity estimation in earth frame = vicon frame */
+					p0_Pa /= (float)(baro_loop_cnt);
+					local_flag_baroINITdone = true;
+					char *baro_m_start = "barometer initialized with p0 = ";
+					char p0_char[15];
+					sprintf(p0_char, "%8.2f", p0_Pa/100);
+					char *baro_m_end = " mbar";
+					char str[80];
+					strcpy(str,baro_m_start);
+					strcat(str,p0_char);
+					strcat(str,baro_m_end);
+					mavlink_log_info(mavlink_fd, str);
+				}
+			}
+			if(local_flag_useGPS){
+				/* initialize map projection with the last estimate (not at full rate) */
+				if (gps.fix_type > 2) {
+					/* Project gps lat lon (Geographic coordinate system) to plane*/
+					map_projection_project(((double)(gps.lat)) * 1e-7, ((double)(gps.lon)) * 1e-7, &(z[0]), &(z[1]));
+					local_pos_est.x = z[0];
+					local_pos_est.vx = 0.0f;
+					local_pos_est.y = z[1];
+					local_pos_est.vy = 0.0f;
+					/* negative offset from initialization altitude */
 					float z_est = 0.0f;
 					if(local_flag_baroINITdone && local_flag_useBARO){
-						z_est = -p0_Pa*log(p0_Pa/(sensor.baro_pres_mbar*100))/(rho0*const_earth_gravity);
+						//printf("use BARO\n");
 						K[0] = K_baro[0];
 						K[1] = K_baro[1];
 						K[2] = K_baro[2];
+						z_est = -p0_Pa*log(p0_Pa/(sensor.baro_pres_mbar*100))/(rho0*const_earth_gravity);
 					}else{
-						z_est = vicon_pos.z;
-						K[0] = K_vicon[0];
-						K[1] = K_vicon[1];
-						K[2] = K_vicon[2];
+						//printf("NOT use BARO\n");
+						z_est = alt_current - (gps.alt) * 1e-3;
 					}
-					kalman_dlqe2(dT_const,K[0],K[1],K[2],x_z_aposteriori_k,z_est,x_z_aposteriori);
+					kalman_dlqe2(dT_const_120,K[0],K[1],K[2],x_z_aposteriori_k,z_est,x_z_aposteriori);
 					memcpy(x_z_aposteriori_k, x_z_aposteriori, sizeof(x_z_aposteriori));
-					local_pos_est.x = x_x_aposteriori_k[0];
-					local_pos_est.vx = x_x_aposteriori_k[1];
-					local_pos_est.y = x_y_aposteriori_k[0];
-					local_pos_est.vy = x_y_aposteriori_k[1];
 					local_pos_est.z = x_z_aposteriori_k[0];
 					local_pos_est.vz = x_z_aposteriori_k[1];
-					//local_pos_est.vz = (float)(debug);
-					local_pos_est.timestamp = hrt_absolute_time();
 					orb_publish(ORB_ID(vehicle_local_position), local_pos_est_pub, &local_pos_est);
 				}
-			} /* end of poll call for vicon updates */
+			}else{
+				/* x-y-position/velocity estimation in earth frame = vicon frame */
+				kalman_dlqe3(dT_const_50,K_vicon_50Hz[0],K_vicon_50Hz[1],K_vicon_50Hz[2],x_x_aposteriori_k,posX,viconUpdate,addNoise,sigma,x_x_aposteriori);
+				memcpy(x_x_aposteriori_k, x_x_aposteriori, sizeof(x_x_aposteriori));
+				kalman_dlqe3(dT_const_50,K_vicon_50Hz[0],K_vicon_50Hz[1],K_vicon_50Hz[2],x_y_aposteriori_k,posY,viconUpdate,addNoise,sigma,x_y_aposteriori);
+				memcpy(x_y_aposteriori_k, x_y_aposteriori, sizeof(x_y_aposteriori));
+				/* z-position/velocity estimation in earth frame = vicon frame */
+				float z_est = 0.0f;
+				if(local_flag_baroINITdone && local_flag_useBARO){
+					z_est = -p0_Pa*log(p0_Pa/(sensor.baro_pres_mbar*100))/(rho0*const_earth_gravity);
+					K[0] = K_baro[0];
+					K[1] = K_baro[1];
+					K[2] = K_baro[2];
+				}else{
+					z_est = posZ;
+					K[0] = K_vicon_50Hz[0];
+					K[1] = K_vicon_50Hz[1];
+					K[2] = K_vicon_50Hz[2];
+				}
+				//kalman_dlqe2(dT_const,K[0],K[1],K[2],x_z_aposteriori_k,z_est,x_z_aposteriori);
+				kalman_dlqe3(dT_const_50,K[0],K[1],K[2],x_z_aposteriori_k,posZ,viconUpdate,addNoise,sigma,x_z_aposteriori);
+				memcpy(x_z_aposteriori_k, x_z_aposteriori, sizeof(x_z_aposteriori));
+				local_pos_est.x = x_x_aposteriori_k[0];
+				local_pos_est.vx = x_x_aposteriori_k[1];
+				local_pos_est.y = x_y_aposteriori_k[0];
+				local_pos_est.vy = x_y_aposteriori_k[1];
+				local_pos_est.z = x_z_aposteriori_k[0];
+				local_pos_est.vz = x_z_aposteriori_k[1];
+				//local_pos_est.vz = debug;
+				local_pos_est.timestamp = hrt_absolute_time();
+				orb_publish(ORB_ID(vehicle_local_position), local_pos_est_pub, &local_pos_est);
+			}
 		} /* end of poll return value check */
 	}
 
