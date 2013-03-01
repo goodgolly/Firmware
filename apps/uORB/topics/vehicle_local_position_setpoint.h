@@ -51,6 +51,7 @@
 
 struct vehicle_local_position_setpoint_s
 {
+	uint64_t timestamp; /**< time of this estimate, in microseconds since system start */
 	float x;		/**< in meters NED			  		*/
 	float y;		/**< in meters NED			  		*/
 	float z;		/**< in meters NED			  		*/

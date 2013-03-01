@@ -389,6 +389,7 @@ l_local_position_setpoint(struct listener *l)
 	if (gcs_link)
 		mavlink_msg_local_position_setpoint_send(MAVLINK_COMM_0,
 				MAV_FRAME_LOCAL_NED,
+				//local_sp.timestamp / 1000,
 				local_sp.x,
 				local_sp.y,
 				local_sp.z,

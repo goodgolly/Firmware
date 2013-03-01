@@ -47,6 +47,9 @@ struct multirotor_position_control_params {
 	float height_p;
 	float height_d;
 	float height_sp;
+	float loc_sp_x;
+	float loc_sp_y;
+	float loc_sp_z;
 };
 
 struct multirotor_position_control_param_handles {
@@ -55,6 +58,9 @@ struct multirotor_position_control_param_handles {
 	param_t height_p;
 	param_t height_d;
 	param_t height_sp;
+	param_t loc_sp_x_param_handle;
+	param_t loc_sp_y_param_handle;
+	param_t loc_sp_z_param_handle;
 };
 
 /**

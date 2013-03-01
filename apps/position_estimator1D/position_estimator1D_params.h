@@ -53,9 +53,6 @@ struct position_estimator1D_params {
 	float accThres;
 	float flyingT;
 	float velDecay;
-	float loc_sp_x;
-	float loc_sp_y;
-	float loc_sp_z;
 };
 
 struct position_estimator1D_param_handles {
@@ -69,9 +66,6 @@ struct position_estimator1D_param_handles {
 	param_t accThreshold_param_handle;
 	param_t flyingThreshold_param_handle;
 	param_t velDecay_param_handle;
-	param_t loc_sp_x_param_handle;
-	param_t loc_sp_y_param_handle;
-	param_t loc_sp_z_param_handle;
 };
 
 /**

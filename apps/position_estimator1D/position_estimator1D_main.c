@@ -202,9 +202,6 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 	static float posX = 0.0f;
 	static float posY = 0.0f;
 	static float posZ = 0.0f;
-	static float local_pos_x = 0.0f;
-	static float local_pos_y = 0.0f;
-	static float local_pos_z = -0.8f;
 
 	static float acc_x_body = 0.0f;
 	static float acc_y_body = 0.0f;
@@ -239,8 +236,6 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 	memset(&gps, 0, sizeof(gps));
 	struct vehicle_local_position_s local_pos_est;
 	memset(&local_pos_est, 0, sizeof(local_pos_est));
-	struct vehicle_local_position_setpoint_s local_pos_sp;
-	memset(&local_pos_sp, 0, sizeof(local_pos_sp));
 
 	/* subscribe */
 	int sensor_sub = orb_subscribe(ORB_ID(sensor_combined));
@@ -254,7 +249,6 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 
 	/* advertise */
 	orb_advert_t local_pos_est_pub = orb_advertise(ORB_ID(vehicle_local_position), &local_pos_est);
-	orb_advert_t local_pos_sp_pub = orb_advertise(ORB_ID(vehicle_local_position_setpoint), &local_pos_sp);
 
 	struct position_estimator1D_params pos1D_params;
 	struct position_estimator1D_param_handles pos1D_param_handles;
@@ -274,9 +268,6 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 	viconCntMax = (int)(pos1D_params.viconDivider);
 	sigma = pos1D_params.sigma;
 	addNoise = pos1D_params.addNoise;
-	local_pos_x = pos1D_params.loc_sp_x;
-	local_pos_y = pos1D_params.loc_sp_y;
-	local_pos_z = pos1D_params.loc_sp_z;
 	/* END FIRST PARAMETER UPDATE */
 
 	if(local_flag_useGPS){
@@ -370,12 +361,6 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 				viconCntMax = (int)(pos1D_params.viconDivider);
 				sigma = pos1D_params.sigma;
 				addNoise = pos1D_params.addNoise;
-				/* write local_pos_sp from pos_estimator to pos controller */
-				local_pos_sp.x = pos1D_params.loc_sp_x;
-				local_pos_sp.y = pos1D_params.loc_sp_y;
-				local_pos_sp.z = pos1D_params.loc_sp_z;
-				orb_publish(ORB_ID(vehicle_local_position), local_pos_est_pub, &local_pos_est);
-				printf("[pos_est1D] local_pos_z: %8.4f\n", (double)(local_pos_sp.z));
 			}
 			static float viconUpdate = 0.0f; /* default is no viconUpdate */
 			if (fds2[1].revents & POLLIN) {
@@ -462,18 +447,20 @@ int position_estimator1D_thread_main(int argc, char *argv[])
 					K[2] = K_vicon_50Hz[2];
 					local_sigma = sigma;
 				}
-				//kalman_dlqe2(dT_const,K[0],K[1],K[2],x_z_aposteriori_k,z_est,x_z_aposteriori);
 				kalman_dlqe3(dT_const_50,K[0],K[1],K[2],x_z_aposteriori_k,z_est,viconUpdate,addNoise,local_sigma,x_z_aposteriori);
 				memcpy(x_z_aposteriori_k, x_z_aposteriori, sizeof(x_z_aposteriori));
 				local_pos_est.x = x_x_aposteriori_k[0];
 				local_pos_est.vx = x_x_aposteriori_k[1];
+				//local_pos_est.vx = local_pos_x; //getestet, funktioniert
 				local_pos_est.y = x_y_aposteriori_k[0];
 				local_pos_est.vy = x_y_aposteriori_k[1];
 				local_pos_est.z = x_z_aposteriori_k[0];
 				local_pos_est.vz = x_z_aposteriori_k[1];
 				//local_pos_est.vz = debug;
 				local_pos_est.timestamp = hrt_absolute_time();
-				orb_publish(ORB_ID(vehicle_local_position), local_pos_est_pub, &local_pos_est);
+				if((isfinite(x_x_aposteriori_k[0])) && (isfinite(x_x_aposteriori_k[1])) && (isfinite(x_y_aposteriori_k[0])) && (isfinite(x_y_aposteriori_k[1])) && (isfinite(x_z_aposteriori_k[0])) && (isfinite(x_z_aposteriori_k[1]))){
+					orb_publish(ORB_ID(vehicle_local_position), local_pos_est_pub, &local_pos_est);
+				}
 			}
 		} /* end of poll return value check */
 	}
