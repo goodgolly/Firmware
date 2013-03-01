@@ -1,7 +1,7 @@
 /****************************************************************************
  * apps/nshlib/nsh_fscmds.c
  *
- *   Copyright (C) 2007-2009, 2011-2012 Gregory Nutt. All rights reserved.
+ *   Copyright (C) 2007-2009, 2011-2013 Gregory Nutt. All rights reserved.
  *   Author: Gregory Nutt <gnutt@nuttx.org>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -1221,71 +1221,6 @@ int cmd_rmdir(FAR struct nsh_vtbl_s *vtbl, int argc, char **argv)
 #endif
 
 /****************************************************************************
- * Name: nsh_script
- ****************************************************************************/
-
-#if  CONFIG_NFILE_DESCRIPTORS > 0 && CONFIG_NFILE_STREAMS > 0 && !defined(CONFIG_NSH_DISABLESCRIPT)
-int nsh_script(FAR struct nsh_vtbl_s *vtbl, const char *cmd, const char *path)
-{
-  char *fullpath;
-  FILE *stream;
-  char *buffer;
-  char *pret;
-  int ret = ERROR;
-
-  /* The path to the script may be relative to the current working directory */
-
-  fullpath = nsh_getfullpath(vtbl, path);
-  if (!fullpath)
-    {
-      return ERROR;
-    }
-
-  /* Get a reference to the common input buffer */
-
-  buffer = nsh_linebuffer(vtbl);
-  if (buffer)
-    {
-      /* Open the file containing the script */
-
-      stream = fopen(fullpath, "r");
-      if (!stream)
-        {
-          nsh_output(vtbl, g_fmtcmdfailed, cmd, "fopen", NSH_ERRNO);
-          nsh_freefullpath(fullpath);
-          return ERROR;
-        }
-
-      /* Loop, processing each command line in the script file (or
-       * until an error occurs)
-       */
-
-      do
-        {
-          /* Get the next line of input from the file */
-
-          fflush(stdout);
-          pret = fgets(buffer, CONFIG_NSH_LINELEN, stream);
-          if (pret)
-            {
-              /* Parse process the command.  NOTE:  this is recursive...
-               * we got to cmd_sh via a call to nsh_parse.  So some
-               * considerable amount of stack may be used.
-               */
-
-              ret = nsh_parse(vtbl, buffer);
-            }
-        }
-      while (pret && ret == OK);
-      fclose(stream);
-    }
-
-  nsh_freefullpath(fullpath);
-  return ret;
-}
-#endif
-
-/****************************************************************************
  * Name: cmd_sh
  ****************************************************************************/
 
@@ -1294,6 +1229,87 @@ int nsh_script(FAR struct nsh_vtbl_s *vtbl, const char *cmd, const char *path)
 int cmd_sh(FAR struct nsh_vtbl_s *vtbl, int argc, char **argv)
 {
   return nsh_script(vtbl, argv[0], argv[1]);
+}
+#endif
+#endif
+
+
+#if CONFIG_NFILE_DESCRIPTORS > 0
+#ifndef CONFIG_NSH_DISABLE_CMP
+int cmd_cmp(FAR struct nsh_vtbl_s *vtbl, int argc, char **argv)
+{
+  char *path1 = NULL;
+  char *path2 = NULL;
+  int fd1 = -1, fd2 = -1;
+  int ret = ERROR;
+  unsigned total_read = 0;
+
+  /* Get the full path to the two files */
+
+  path1 = nsh_getfullpath(vtbl, argv[1]);
+  if (!path1)
+    {
+      goto errout;
+    }
+
+  path2 = nsh_getfullpath(vtbl, argv[2]);
+  if (!path2)
+    {
+      goto errout;
+    }
+
+  /* Open the files for reading */
+  fd1 = open(path1, O_RDONLY);
+  if (fd1 < 0)
+    {
+      nsh_output(vtbl, g_fmtcmdfailed, argv[0], "open", NSH_ERRNO);
+      goto errout;
+    }
+
+  fd2 = open(path2, O_RDONLY);
+  if (fd2 < 0)
+    {
+      nsh_output(vtbl, g_fmtcmdfailed, argv[0], "open", NSH_ERRNO);
+      goto errout;
+    }
+
+  for (;;)
+    {
+      char buf1[128];
+      char buf2[128];
+
+      int nbytesread1 = read(fd1, buf1, sizeof(buf1));
+      int nbytesread2 = read(fd2, buf2, sizeof(buf2));
+
+      if (nbytesread1 < 0)
+          {
+	      nsh_output(vtbl, g_fmtcmdfailed, argv[0], "read", NSH_ERRNO);
+	      goto errout;
+	  }
+
+      if (nbytesread2 < 0)
+          {
+	      nsh_output(vtbl, g_fmtcmdfailed, argv[0], "read", NSH_ERRNO);
+	      goto errout;
+	  }
+
+      total_read += nbytesread1>nbytesread2?nbytesread2:nbytesread1;
+
+      if (nbytesread1 != nbytesread2 || memcmp(buf1, buf2, nbytesread1) != 0)
+          {
+	      nsh_output(vtbl, "files differ: byte %u\n", total_read);
+              goto errout;
+          }
+
+      if (nbytesread1 < sizeof(buf1)) break;
+    }
+
+  ret = OK;
+
+errout:
+  if (fd1 != -1) close(fd1);
+  if (fd2 != -1) close(fd2);
+  return ret;
 }
 #endif
 #endif

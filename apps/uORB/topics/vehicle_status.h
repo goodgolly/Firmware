@@ -156,7 +156,9 @@ struct vehicle_status_s
 	enum VEHICLE_FLIGHT_MODE flight_mode;		/**< current flight mode, as defined by mode switch */
 	enum VEHICLE_MANUAL_CONTROL_MODE manual_control_mode;	/**< current attitude control mode, as defined by VEHICLE_ATTITUDE_MODE enum */
 	enum VEHICLE_MANUAL_SAS_MODE	manual_sas_mode;	/**< current stabilization mode */
-	int32_t system_type;				/**< system type, inspired by MAVLinks VEHICLE_TYPE enum */
+	int32_t system_type;				/**< system type, inspired by MAVLink's VEHICLE_TYPE enum */
+	int32_t	system_id;				/**< system id, inspired by MAVLink's system ID field */
+	int32_t component_id;				/**< subsystem / component id, inspired by MAVLink's component ID field */
 
 	/* system flags - these represent the state predicates */
 
@@ -171,8 +173,9 @@ struct vehicle_status_s
 	bool flag_control_position_enabled;		/**< true if position is controlled */
 
 	bool flag_preflight_gyro_calibration;		/**< true if gyro calibration is requested */
-	bool flag_preflight_mag_calibration;			/**< true if mag calibration is requested */
+	bool flag_preflight_mag_calibration;		/**< true if mag calibration is requested */
 	bool flag_preflight_accel_calibration;
+	bool flag_preflight_airspeed_calibration;
 
 	bool rc_signal_found_once;
 	bool rc_signal_lost;				/**< true if RC reception is terminally lost */
@@ -213,6 +216,8 @@ struct vehicle_status_s
 	bool flag_useGPS;						/**< Indicates Globally if GPS is in use or Vicon is used */
 	bool flag_useBARO;						/**< Indicates Globally if barometric pressure sensor is used */
 	bool flag_baroINITdone;						/**< Indicates that initial barometric pressure is measured */
+	bool flag_valid_home_position;			/**< indicates a valid home position (a valid home position is not always a valid launch) */
+	bool flag_airspeed_valid;			/**< set to true by the commander app if there is a valid airspeed measurement available */
 };
 
 /**
